@@ -100,13 +100,18 @@
 #define JIT_F_OPT_DEFAULT	JIT_F_OPT_3
 
 /* -- JIT engine parameters ----------------------------------------------- */
-
+#if LJ_TARGET_PSP2
+#define JIT_P_sizemcode_DEFAULT		1024
+#define JIT_P_maxmcode_DEFAULT          8192
+#else
+#define JIT_P_maxmcode_DEFAULT          512
 #if LJ_TARGET_WINDOWS || LJ_64
 /* See: http://blogs.msdn.com/oldnewthing/archive/2003/10/08/55239.aspx */
 #define JIT_P_sizemcode_DEFAULT		64
 #else
 /* Could go as low as 4K, but the mmap() overhead would be rather high. */
 #define JIT_P_sizemcode_DEFAULT		32
+#endif
 #endif
 
 /* Optimization parameters and their defaults. Length is a char in octal! */
