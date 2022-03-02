@@ -2,7 +2,7 @@
 ** FOLD: Constant Folding, Algebraic Simplifications and Reassociation.
 ** ABCelim: Array Bounds Check Elimination.
 ** CSE: Common-Subexpression Elimination.
-** Copyright (C) 2005-2021 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_opt_fold_c
@@ -597,14 +597,16 @@ LJFOLDF(bufput_bufstr)
     /* New buffer, no other buffer op inbetween and same buffer? */
     if (fleft->o == IR_BUFHDR && fleft->op2 == IRBUFHDR_RESET &&
 	fleft->prev == hdr &&
-	fleft->op1 == IR(hdr)->op1) {
+	fleft->op1 == IR(hdr)->op1 &&
+	!(irt_isphi(fright->t) && IR(hdr)->prev) &&
+	(!LJ_HASBUFFER || J->chain[IR_CALLA] < hdr)) {
       IRRef ref = fins->op1;
       IR(ref)->op2 = IRBUFHDR_APPEND;  /* Modify BUFHDR. */
       IR(ref)->op1 = fright->op1;
       return ref;
     }
     /* Replay puts to global temporary buffer. */
-    if (IR(hdr)->op2 == IRBUFHDR_RESET) {
+    if (IR(hdr)->op2 == IRBUFHDR_RESET && !irt_isphi(fright->t)) {
       IRIns *ir = IR(fright->op1);
       /* For now only handle single string.reverse .lower .upper .rep. */
       if (ir->o == IR_CALLL &&
@@ -1139,33 +1141,6 @@ LJFOLDF(simplify_numpow_xkint)
     ref = emitir(IRTN(IR_MUL), ref, tmp);
   }
   return ref;
-}
-
-LJFOLD(POW any KNUM)
-LJFOLDF(simplify_numpow_xknum)
-{
-  if (knumright == 0.5)  /* x ^ 0.5 ==> sqrt(x) */
-    return emitir(IRTN(IR_FPMATH), fins->op1, IRFPM_SQRT);
-  return NEXTFOLD;
-}
-
-LJFOLD(POW KNUM any)
-LJFOLDF(simplify_numpow_kx)
-{
-  lua_Number n = knumleft;
-  if (n == 2.0 && irt_isint(fright->t)) {  /* 2.0 ^ i ==> ldexp(1.0, i) */
-#if LJ_TARGET_X86ORX64
-    /* Different IR_LDEXP calling convention on x86/x64 requires conversion. */
-    fins->o = IR_CONV;
-    fins->op1 = fins->op2;
-    fins->op2 = IRCONV_NUM_INT;
-    fins->op2 = (IRRef1)lj_opt_fold(J);
-#endif
-    fins->op1 = (IRRef1)lj_ir_knum_one(J);
-    fins->o = IR_LDEXP;
-    return RETRYFOLD;
-  }
-  return NEXTFOLD;
 }
 
 /* -- Simplify conversions ------------------------------------------------ */
@@ -1958,14 +1933,15 @@ LJFOLDF(abc_fwd)
 LJFOLD(ABC any KINT)
 LJFOLDF(abc_k)
 {
+  PHIBARRIER(fleft);
   if (LJ_LIKELY(J->flags & JIT_F_OPT_ABC)) {
     IRRef ref = J->chain[IR_ABC];
     IRRef asize = fins->op1;
     while (ref > asize) {
       IRIns *ir = IR(ref);
       if (ir->op1 == asize && irref_isk(ir->op2)) {
-	int32_t k = IR(ir->op2)->i;
-	if (fright->i > k)
+	uint32_t k = (uint32_t)IR(ir->op2)->i;
+	if ((uint32_t)fright->i > k)
 	  ir->op2 = fins->op2;
 	return DROPFOLD;
       }
