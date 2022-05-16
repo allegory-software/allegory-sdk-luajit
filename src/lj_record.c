@@ -675,7 +675,8 @@ static LoopEvent rec_itern(jit_State *J, BCReg ra, BCReg rb)
   lj_snap_add(J);  /* Required to make JLOOP the first ins in a side-trace. */
   ix.tab = getslot(J, ra-2);
   ix.key = J->base[ra-1] ? J->base[ra-1] :
-	   sloadt(J, (int32_t)(ra-1), IRT_INT, IRSLOAD_KEYINDEX);
+	   sloadt(J, (int32_t)(ra-1), IRT_GUARD|IRT_INT,
+		  IRSLOAD_TYPECHECK|IRSLOAD_KEYINDEX);
   copyTV(J->L, &ix.tabv, &J->L->base[ra-2]);
   copyTV(J->L, &ix.keyv, &J->L->base[ra-1]);
   ix.idxchain = (rb < 3);  /* Omit value type check, if unused. */
@@ -1447,16 +1448,16 @@ static TRef rec_idx_key(jit_State *J, RecordIndex *ix, IRRef *rbref,
     key = emitir(IRTN(IR_CONV), key, IRCONV_NUM_INT);
   if (tref_isk(key)) {
     /* Optimize lookup of constant hash keys. */
-    MSize hslot = (MSize)((char *)ix->oldv - (char *)&noderef(t->node)[0].val);
-    if (t->hmask > 0 && hslot <= t->hmask*(MSize)sizeof(Node) &&
-	hslot <= 65535*(MSize)sizeof(Node)) {
+    GCSize hslot = (GCSize)((char *)ix->oldv-(char *)&noderef(t->node)[0].val);
+    if (hslot <= t->hmask*(GCSize)sizeof(Node) &&
+	hslot <= 65535*(GCSize)sizeof(Node)) {
       TRef node, kslot, hm;
       *rbref = J->cur.nins;  /* Mark possible rollback point. */
       *rbguard = J->guardemit;
       hm = emitir(IRTI(IR_FLOAD), ix->tab, IRFL_TAB_HMASK);
       emitir(IRTGI(IR_EQ), hm, lj_ir_kint(J, (int32_t)t->hmask));
       node = emitir(IRT(IR_FLOAD, IRT_PGC), ix->tab, IRFL_TAB_NODE);
-      kslot = lj_ir_kslot(J, key, hslot / sizeof(Node));
+      kslot = lj_ir_kslot(J, key, (IRRef)(hslot / sizeof(Node)));
       return emitir(IRTG(IR_HREFK, IRT_PGC), node, kslot);
     }
   }
@@ -2042,7 +2043,7 @@ static TRef rec_tnew(jit_State *J, uint32_t ah)
 static TRef rec_cat(jit_State *J, BCReg baseslot, BCReg topslot)
 {
   TRef *top = &J->base[topslot];
-  TValue savetv[5];
+  TValue savetv[5+LJ_FR2];
   BCReg s;
   RecordIndex ix;
   lj_assertJ(baseslot < topslot, "bad CAT arg");
@@ -2394,7 +2395,7 @@ void lj_record_ins(jit_State *J)
 
   case BC_POW:
     if (tref_isnumber_str(rb) && tref_isnumber_str(rc))
-      rc = lj_opt_narrow_pow(J, rb, rc, rbv, rcv);
+      rc = lj_opt_narrow_arith(J, rb, rc, rbv, rcv, IR_POW);
     else
       rc = rec_mm_arith(J, &ix, MM_pow);
     break;

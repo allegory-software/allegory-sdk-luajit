@@ -83,7 +83,7 @@ extern int XNetRandom(void *buf, unsigned int len);
 
 extern int sys_get_random_number(void *buf, uint64_t len);
 
-#elif LJ_TARGET_PS4 || LJ_TARGET_PSVITA
+#elif LJ_TARGET_PS4 || LJ_TARGET_PS5 || LJ_TARGET_PSVITA
 
 extern int sceRandomGetRandomNumber(void *buf, size_t len);
 
@@ -126,7 +126,7 @@ static PRGR libfunc_rgr;
 #endif
 
 #if LJ_TARGET_HAS_GETENTROPY
-extern int getentropy(void *buf, size_t len);
+extern int getentropy(void *buf, size_t len)
 #ifdef __ELF__
   __attribute__((weak))
 #endif
@@ -171,7 +171,7 @@ int LJ_FASTCALL lj_prng_seed_secure(PRNGState *rs)
   if (sys_get_random_number(rs->u, sizeof(rs->u)) == 0)
     goto ok;
 
-#elif LJ_TARGET_PS4 || LJ_TARGET_PSVITA
+#elif LJ_TARGET_PS4 || LJ_TARGET_PS5 || LJ_TARGET_PSVITA
 
   if (sceRandomGetRandomNumber(rs->u, sizeof(rs->u)) == 0)
     goto ok;
