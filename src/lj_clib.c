@@ -53,7 +53,7 @@ LJ_NORET LJ_NOINLINE static void clib_error_(lua_State *L)
 #elif LJ_TARGET_CYGWIN
 #define CLIB_SOEXT	"%s.dll"
 #elif LJ_TARGET_PSP2
-#define CLIB_SOEXT	"%s"
+#define CLIB_SOEXT	"%s.suprx"
 #else
 #define CLIB_SOEXT	"%s.so"
 #endif
