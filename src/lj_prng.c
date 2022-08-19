@@ -189,6 +189,11 @@ int LJ_FASTCALL lj_prng_seed_secure(PRNGState *rs)
   if (getentropy(rs->u, sizeof(rs->u)) == 0)
     goto ok;
 
+#elif LJ_TARGET_PSP2
+
+  if (sceKernelGetRandomNumber(rs->u, sizeof(rs->u)) == 0)
+    goto ok;
+
 #elif LJ_TARGET_UWP || LJ_TARGET_XBOXONE
 
   if (BCryptGenRandom(NULL, (PUCHAR)(rs->u), (ULONG)sizeof(rs->u),
