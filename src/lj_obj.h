@@ -527,7 +527,13 @@ typedef struct GCtab {
 /* VM states. */
 enum {
   LJ_VMST_INTERP,	/* Interpreter. */
+#if LJ_HASMEMPROF
+  LJ_VMST_LFUNC,	/* Lua function. */
+  LJ_VMST_FFUNC,	/* Fast function. */
+  LJ_VMST_CFUNC,	/* C function. */
+#else
   LJ_VMST_C,		/* C function. */
+#endif
   LJ_VMST_GC,		/* Garbage collector. */
   LJ_VMST_EXIT,		/* Trace exit handler. */
   LJ_VMST_RECORD,	/* Trace recorder. */
@@ -535,6 +541,15 @@ enum {
   LJ_VMST_ASM,		/* Assembler. */
   LJ_VMST__MAX
 };
+
+#if LJ_HASMEMPROF
+/*
+** In fact, when VM executes a trace, vmstate is set to the trace number,
+** but we set the boundary to group all traces in a single pseudo-vmstate.
+*/
+
+#define LJ_VMST_TRACE		(LJ_VMST__MAX)
+#endif
 
 #define setvmstate(g, st)	((g)->vmstate = ~LJ_VMST_##st)
 
@@ -586,6 +601,17 @@ typedef enum {
 #define basemt_obj(g, o)	((g)->gcroot[GCROOT_BASEMT+itypemap(o)])
 #define mmname_str(g, mm)	(strref((g)->gcroot[GCROOT_MMNAME+(mm)]))
 
+/* Garbage collector states. Order matters. */
+enum {
+  GCSpause,		/* Start a GC cycle and mark the root set.*/
+  GCSpropagate,		/* One gray object is processed. */
+  GCSatomic,		/* Atomic transition from mark to sweep phase. */
+  GCSsweepstring,	/* Sweep one chain of strings. */
+  GCSsweep,		/* Sweep few objects from root. */
+  GCSfinalize,		/* Finalize one userdata or cdata object. */
+  GCSmax
+};
+
 /* Garbage collector state. */
 typedef struct GCState {
   GCSize total;		/* Memory currently allocated. */
@@ -612,6 +638,17 @@ typedef struct GCState {
 #if LJ_64
   MRef lightudseg;	/* Upper bits of lightuserdata segments. */
 #endif
+#if LJ_HASMEMPROF
+
+  size_t freed;		/* Total amount of freed memory. */
+  size_t allocated;	/* Total amount of allocated memory. */
+  size_t state_count[GCSmax]; /* Count of incremental GC steps per state. */
+  size_t tabnum;	/* Amount of allocated table objects. */
+  size_t udatanum;	/* Amount of allocated udata objects. */
+#ifdef LJ_HASFFI
+  size_t cdatanum;	/* Amount of allocated cdata objects. */
+#endif
+#endif
 } GCState;
 
 /* String interning state. */
@@ -629,6 +666,10 @@ typedef struct StrInternState {
 
 /* Global state, shared by all threads of a Lua universe. */
 typedef struct global_State {
+#if LJ_HASMEMPROF
+  size_t strhash_hit;	/* Strings amount found in string hash. */
+  size_t strhash_miss;	/* Strings amount allocated and put into string hash. */
+#endif
   lua_Alloc allocf;	/* Memory allocator. */
   void *allocd;		/* Memory allocator data. */
   GCState gc;		/* Garbage collector. */
@@ -653,6 +694,9 @@ typedef struct global_State {
   BCIns bc_cfunc_int;	/* Bytecode for internal C function calls. */
   BCIns bc_cfunc_ext;	/* Bytecode for external C function calls. */
   GCRef cur_L;		/* Currently executing lua_State. */
+#if LJ_HASMEMPROF
+  GCRef mem_L;		/* Currently allocating lua_State. */
+#endif
   MRef jit_base;	/* Current JIT code L->base or NULL. */
   MRef ctype_state;	/* Pointer to C type state. */
   PRNGState prng;	/* Global PRNG state. */

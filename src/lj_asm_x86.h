@@ -1876,7 +1876,17 @@ static void asm_cnew(ASMState *as, IRIns *ir)
     emit_loadi(as, ra_releasetmp(as, ASMREF_TMP1), (int32_t)ctype_align(info));
     return;
   }
-
+#if LJ_HASMEMPROF
+  /* Increment cdatanum counter by address directly. */
+  emit_i8(as, 1);
+#if LJ_GC64
+  emit_rmro(as, XO_ARITHi8, XOg_ADD|REX_64, RID_DISPATCH,
+	    dispofs(as, &J2G(as->J)->gc.cdatanum));
+#else
+  emit_rmro(as, XO_ARITHi8, XOg_ADD, RID_NONE,
+	    ptr2addr(&J2G(as->J)->gc.cdatanum));
+#endif
+#endif
   /* Combine initialization of marked, gct and ctypeid. */
   emit_movtomro(as, RID_ECX, RID_RET, offsetof(GCcdata, marked));
   emit_gri(as, XG_ARITHi(XOg_OR), RID_ECX,

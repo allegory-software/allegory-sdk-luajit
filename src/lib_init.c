@@ -12,6 +12,7 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
+#include "lmisclib.h"
 
 #include "lj_arch.h"
 
@@ -26,6 +27,9 @@ static const luaL_Reg lj_lib_load[] = {
   { LUA_DBLIBNAME,	luaopen_debug },
   { LUA_BITLIBNAME,	luaopen_bit },
   { LUA_JITLIBNAME,	luaopen_jit },
+#if LJ_HASMEMPROF
+  { LUAM_MISCLIBNAME,	luaopen_misc },
+#endif
   { NULL,		NULL }
 };
 

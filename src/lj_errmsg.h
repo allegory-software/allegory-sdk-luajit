@@ -193,6 +193,13 @@ ERRDEF(BUFFER_EOB,	"unexpected end of buffer")
 ERRDEF(BUFFER_LEFTOV,	"left-over data in buffer")
 #endif
 
+/* Profiler errors. */
+ERRDEF(PROF_MISUSE,	"profiler misuse")
+#if LJ_HASMEMPROF
+ERRDEF(PROF_ISRUNNING,	"profiler is running already")
+ERRDEF(PROF_NOTRUNNING,	"profiler is not running")
+#endif
+
 #undef ERRDEF
 
 /* Detecting unused error messages:

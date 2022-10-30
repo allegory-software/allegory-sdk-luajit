@@ -46,6 +46,9 @@ GCcdata *lj_cdata_newv(lua_State *L, CTypeID id, CTSize sz, CTSize align)
   cd->marked |= 0x80;
   cd->gct = ~LJ_TCDATA;
   cd->ctypeid = id;
+#if LJ_HASMEMPROF
+  g->gc.cdatanum++;
+#endif
   return cd;
 }
 
@@ -79,8 +82,14 @@ void LJ_FASTCALL lj_cdata_free(global_State *g, GCcdata *cd)
     lj_assertG(ctype_hassize(ct->info) || ctype_isfunc(ct->info) ||
 	       ctype_isextern(ct->info), "free of ctype without a size");
     lj_mem_free(g, cd, sizeof(GCcdata) + sz);
+#if LJ_HASMEMPROF
+    g->gc.cdatanum--;
+#endif
   } else {
     lj_mem_free(g, memcdatav(cd), sizecdatav(cd));
+#if LJ_HASMEMPROF
+    g->gc.cdatanum--;
+#endif
   }
 }
 

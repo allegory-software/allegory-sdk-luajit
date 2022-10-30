@@ -157,7 +157,14 @@ static void profile_trigger(ProfileState *ps)
     int st = g->vmstate;
     ps->vmstate = st >= 0 ? 'N' :
 		  st == ~LJ_VMST_INTERP ? 'I' :
+#if LJ_HASMEMPROF
+		  /* Stubs for profiler hooks. */
+		  st == ~LJ_VMST_LFUNC ? 'I' :
+		  st == ~LJ_VMST_FFUNC ? 'I' :
+		  st == ~LJ_VMST_CFUNC ? 'C' :
+#else
 		  st == ~LJ_VMST_C ? 'C' :
+#endif
 		  st == ~LJ_VMST_GC ? 'G' : 'J';
     g->hookmask = (mask | HOOK_PROFILE);
     lj_dispatch_update(g);

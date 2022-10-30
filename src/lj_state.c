@@ -30,6 +30,10 @@
 #include "lj_alloc.h"
 #include "luajit.h"
 
+#if LJ_HASMEMPROF
+#include "lj_memprof.h"
+#endif
+
 /* -- Stack handling ------------------------------------------------------ */
 
 /* Stack sizes. */
@@ -61,8 +65,21 @@ static void resizestack(lua_State *L, MSize n)
   MSize oldsize = L->stacksize;
   MSize realsize = n + 1 + LJ_STACK_EXTRA;
   GCobj *up;
+#if LJ_HASMEMPROF
+  int32_t oldvmstate = G(L)->vmstate;
+#endif
+
   lj_assertL((MSize)(tvref(L->maxstack)-oldst) == L->stacksize-LJ_STACK_EXTRA-1,
 	     "inconsistent stack size");
+
+#if LJ_HASMEMPROF
+  /*
+  ** Lua stack is inconsistent while reallocation, profilers
+  ** depend on vmstate during reports, so set vmstate to INTERP
+  ** to avoid inconsistent behaviour.
+  */
+  setvmstate(G(L), INTERP);
+#endif
   st = (TValue *)lj_mem_realloc(L, tvref(L->stack),
 				(MSize)(oldsize*sizeof(TValue)),
 				(MSize)(realsize*sizeof(TValue)));
@@ -78,6 +95,10 @@ static void resizestack(lua_State *L, MSize n)
   L->top = (TValue *)((char *)L->top + delta);
   for (up = gcref(L->openupval); up != NULL; up = gcnext(up))
     setmref(gco2uv(up)->v, (TValue *)((char *)uvval(gco2uv(up)) + delta));
+
+#if LJ_HASMEMPROF
+  G(L)->vmstate = oldvmstate;
+#endif
 }
 
 /* Relimit stack after error, in case the limit was overdrawn. */
@@ -250,6 +271,9 @@ LUA_API lua_State *lua_newstate(lua_Alloc allocf, void *allocd)
   setgcref(g->gc.root, obj2gco(L));
   setmref(g->gc.sweep, &g->gc.root);
   g->gc.total = sizeof(GG_State);
+#if LJ_HASMEMPROF
+  g->gc.allocated = g->gc.total;
+#endif
   g->gc.pause = LUAI_GCPAUSE;
   g->gc.stepmul = LUAI_GCMUL;
   lj_dispatch_init((GG_State *)L);
@@ -278,6 +302,9 @@ LUA_API void lua_close(lua_State *L)
   global_State *g = G(L);
   int i;
   L = mainthread(g);  /* Only the main thread can be closed. */
+#if LJ_HASMEMPROF
+  lj_memprof_stop(L);
+#endif
 #if LJ_HASPROFILE
   luaJIT_profile_stop(L);
 #endif
