@@ -220,7 +220,7 @@ TARGET_DYLIBNAME= libluajit-$(ABIVER).$(MAJVER).dylib
 TARGET_DYLIBPATH= $(TARGET_LIBPATH)/$(TARGET_DYLIBNAME)
 TARGET_DLLNAME= lua$(NODOTABIVER).dll
 TARGET_DLLDOTANAME= libluajit-$(ABIVER).dll.a
-TARGET_XSHLDFLAGS= -shared -fPIC 
+TARGET_XSHLDFLAGS= -shared -fPIC
 TARGET_DYNXLDOPTS=
 
 TARGET_LFSFLAGS= -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
@@ -499,7 +499,14 @@ LJVM_MODE= elfasm
 LJLIB_O= lib_base.o lib_math.o lib_bit.o lib_string.o lib_table.o \
 	 lib_io.o lib_os.o lib_package.o lib_debug.o lib_jit.o lib_ffi.o \
 	 lib_buffer.o
-LJLIB_C= $(LJLIB_O:.o=.c)
+LJLIB_C= lib_base.c lib_math.c lib_bit.c lib_string.c lib_table.c \
+	 lib_io.c lib_os.c lib_package.c lib_debug.c lib_jit.c lib_ffi.c \
+	 lib_buffer.c
+
+ifeq (Linux,$(TARGET_SYS))
+    LJLIB_O+= lib_misc.o
+    LJLIB_C+= lib_misc.c
+endif
 
 LJCORE_O= lj_assert.o lj_gc.o lj_err.o lj_char.o lj_bc.o lj_obj.o lj_buf.o \
 	  lj_str.o lj_tab.o lj_func.o lj_udata.o lj_meta.o lj_debug.o \
@@ -515,6 +522,10 @@ LJCORE_O= lj_assert.o lj_gc.o lj_err.o lj_char.o lj_bc.o lj_obj.o lj_buf.o \
 	  lj_carith.o lj_clib.o lj_cparse.o \
 	  lj_lib.o lj_alloc.o lib_aux.o \
 	  $(LJLIB_O) lib_init.o lj_str_hash.o
+
+ifeq (Linux,$(TARGET_SYS))
+  LJCORE_O+= lj_mapi.o lj_memprof.o lj_symtab.o lj_utils_leb128.o lj_wbuf.o
+endif
 
 ifeq (x64,$(TARGET_LJARCH))
   lj_str_hash-CFLAGS = -msse4.2

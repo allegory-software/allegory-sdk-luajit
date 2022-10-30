@@ -653,6 +653,9 @@ static void atomic(global_State *g, lua_State *L)
 static size_t gc_onestep(lua_State *L)
 {
   global_State *g = G(L);
+#if LJ_HASMEMPROF
+  g->gc.state_count[g->gc.state]++;
+#endif
   switch (g->gc.state) {
   case GCSpause:
     gc_mark_start(g);  /* Start a new GC cycle by marking all GC roots. */
@@ -865,6 +868,9 @@ void *lj_mem_realloc(lua_State *L, void *p, GCSize osz, GCSize nsz)
 {
   global_State *g = G(L);
   lj_assertG((osz == 0) == (p == NULL), "realloc API violation");
+#if LJ_HASMEMPROF
+  setgcref(g->mem_L, obj2gco(L));
+#endif
   p = g->allocf(g->allocd, p, osz, nsz);
   if (p == NULL && nsz > 0)
     lj_err_mem(L);
@@ -872,6 +878,10 @@ void *lj_mem_realloc(lua_State *L, void *p, GCSize osz, GCSize nsz)
   lj_assertG(checkptrGC(p),
 	     "allocated memory address %p outside required range", p);
   g->gc.total = (g->gc.total - osz) + nsz;
+#if LJ_HASMEMPROF
+  g->gc.allocated += nsz;
+  g->gc.freed += osz;
+#endif
   return p;
 }
 
@@ -880,11 +890,17 @@ void * LJ_FASTCALL lj_mem_newgco(lua_State *L, GCSize size)
 {
   global_State *g = G(L);
   GCobj *o = (GCobj *)g->allocf(g->allocd, NULL, 0, size);
+#if LJ_HASMEMPROF
+  setgcref(g->mem_L, obj2gco(L));
+#endif
   if (o == NULL)
     lj_err_mem(L);
   lj_assertG(checkptrGC(o),
 	     "allocated memory address %p outside required range", o);
   g->gc.total += size;
+#if LJ_HASMEMPROF
+  g->gc.allocated += size;
+#endif
   setgcrefr(o->gch.nextgc, g->gc.root);
   setgcref(g->gc.root, o);
   newwhite(g, o);

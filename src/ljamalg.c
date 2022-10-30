@@ -88,3 +88,14 @@
 #include "lib_ffi.c"
 #include "lib_buffer.c"
 #include "lib_init.c"
+
+#if LJ_HASMEMPROF
+#include "lj_wbuf.c"
+#include "lj_mapi.c"
+#include "lj_profile_timer.c"
+#include "lj_symtab.c"
+#include "lj_memprof.c"
+#include "lj_sysprof.c"
+#include "lj_utils_leb128.c"
+#include "lib_misc.c"
+#endif

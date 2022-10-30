@@ -146,6 +146,18 @@ static BCLine debug_frameline(lua_State *L, GCfunc *fn, cTValue *nextframe)
   return -1;
 }
 
+/* Get line number for function/frame. */
+BCLine lj_debug_frameline(lua_State *L, GCfunc *fn, cTValue *nextframe)
+{
+  BCPos pc = debug_framepc(L, fn, nextframe);
+  if (pc != NO_BCPOS) {
+    GCproto *pt = funcproto(fn);
+    lj_assertL(pc <= pt->sizebc, "PC out of range");
+    return lj_debug_line(pt, pc);
+  }
+  return -1;
+}
+
 /* -- Variable names ------------------------------------------------------ */
 
 /* Get name of a local variable from slot number and PC. */

@@ -31,6 +31,12 @@
 #include "lj_vmevent.h"
 #include "lj_target.h"
 #include "lj_prng.h"
+#if LJ_HASMEMPROF
+#include "lj_memprof.h"
+#endif
+#if LJ_HASSYSPROF
+#include "lj_sysprof.h"
+#endif
 
 /* -- Error handling ------------------------------------------------------ */
 
@@ -138,6 +144,9 @@ GCtrace * LJ_FASTCALL lj_trace_alloc(lua_State *L, GCtrace *T)
   T2->nsnap = T->nsnap;
   T2->nsnapmap = T->nsnapmap;
   memcpy(p, T->ir + T->nk, szins);
+#ifdef LJ_HASMEMPROF
+  L2J(L)->tracenum++;
+#endif
   return T2;
 }
 
@@ -164,6 +173,15 @@ static void trace_save(jit_State *J, GCtrace *T)
 #ifdef LUAJIT_USE_PERFTOOLS
   perftools_addtrace(T);
 #endif
+
+  /* Add a new trace to the profiler. */
+#if LJ_HASMEMPROF
+  lj_memprof_add_trace(T);
+#endif
+
+#if LJ_HASSYSPROF
+  lj_sysprof_add_trace(T);
+#endif
 }
 
 void LJ_FASTCALL lj_trace_free(global_State *g, GCtrace *T)
@@ -178,6 +196,9 @@ void LJ_FASTCALL lj_trace_free(global_State *g, GCtrace *T)
   lj_mem_free(g, T,
     ((sizeof(GCtrace)+7)&~7) + (T->nins-T->nk)*sizeof(IRIns) +
     T->nsnap*sizeof(SnapShot) + T->nsnapmap*sizeof(SnapEntry));
+#if LJ_HASMEMPROF
+  J->tracenum--;
+#endif
 }
 
 /* Re-enable compiling a prototype by unpatching any modified bytecode. */
@@ -563,8 +584,10 @@ static int trace_downrec(jit_State *J)
   /* Restart recording at the return instruction. */
   lj_assertJ(J->pt != NULL, "no active prototype");
   lj_assertJ(bc_isret(bc_op(*J->pc)), "not at a return bytecode");
-  if (bc_op(*J->pc) == BC_RETM)
+  if (bc_op(*J->pc) == BC_RETM) {
+    J->ntraceabort++;
     return 0;  /* NYI: down-recursion with RETM. */
+  }
   J->parent = 0;
   J->exitno = 0;
   J->state = LJ_TRACE_RECORD;
@@ -642,6 +665,9 @@ static int trace_abort(jit_State *J)
     return trace_downrec(J);
   else if (e == LJ_TRERR_MCODEAL)
     lj_trace_flushall(L);
+#if LJ_HASMEMPROF
+  J->ntraceabort++;
+#endif
   return 0;
 }
 
