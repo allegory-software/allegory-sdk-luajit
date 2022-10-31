@@ -2811,8 +2811,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  set_vmstate LFUNC			// LFUNC after BASE restoration.
   |.else
   |  set_vmstate INTERP
-  |.endif
   |  mov BASE, L:RD->base
+  |.endif
   |  mov RD, L:RD->top
   |  sub RD, BASE
   |  mov LFUNC:RB, [BASE-16]
