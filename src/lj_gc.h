@@ -119,6 +119,9 @@ LJ_FUNC void *lj_mem_grow(lua_State *L, void *p,
 static LJ_AINLINE void lj_mem_free(global_State *g, void *p, size_t osize)
 {
   g->gc.total -= (GCSize)osize;
+#ifdef COUNTS
+  g->gc.freed += osize;
+#endif
   g->allocf(g->allocd, p, osize, 0);
 }
 

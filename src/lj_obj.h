@@ -615,6 +615,17 @@ typedef struct GCState {
 #if LJ_64
   MRef lightudseg;	/* Upper bits of lightuserdata segments. */
 #endif
+#ifdef COUNTS
+  ssize_t freed;	/* Total amount of freed memory. */
+  ssize_t allocated;	/* Total amount of allocated memory. */
+  ssize_t tabnum;	/* Number of allocated table objects. */
+  ssize_t fnum;		/* Number of allocated closure objects */
+  ssize_t thnum;	/* Number of allocated thread objects. */
+  ssize_t udatanum;	/* Number of allocated udata objects. */
+#ifdef LJ_HASFFI
+  ssize_t cdatanum;	/* Number of allocated cdata objects. */
+#endif
+#endif
 } GCState;
 
 /* String interning state. */
@@ -641,6 +652,9 @@ typedef struct global_State {
   uint8_t dispatchmode;	/* Dispatch mode. */
   uint8_t vmevmask;	/* VM event mask. */
   StrInternState str;	/* String interning. */
+#ifdef COUNTS
+  ssize_t strnum;	/* same as str.num but can be reset */
+#endif
   volatile int32_t vmstate;  /* VM state or current JIT code trace number. */
   GCRef mainthref;	/* Link to main thread. */
   SBuf tmpbuf;		/* Temporary string buffer. */
