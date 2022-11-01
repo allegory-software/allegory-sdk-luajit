@@ -122,6 +122,9 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
   }
   if (hbits)
     newhpart(L, t, hbits);
+#ifdef COUNTS
+  G(L)->gc.tabnum++;
+#endif
   return t;
 }
 
@@ -222,6 +225,9 @@ void LJ_FASTCALL lj_tab_free(global_State *g, GCtab *t)
     lj_mem_free(g, t, sizetabcolo((uint32_t)t->colo & 0x7f));
   else
     lj_mem_freet(g, t);
+#ifdef COUNTS
+  g->gc.tabnum--;
+#endif
 }
 
 /* -- Table resizing ------------------------------------------------------ */

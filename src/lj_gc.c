@@ -881,6 +881,10 @@ void *lj_mem_realloc(lua_State *L, void *p, GCSize osz, GCSize nsz)
   lj_assertG(checkptrGC(p),
 	     "allocated memory address %p outside required range", p);
   g->gc.total = (g->gc.total - osz) + nsz;
+#ifdef COUNTS
+  g->gc.allocated += nsz;
+  g->gc.freed += osz;
+#endif
   return p;
 }
 
@@ -894,6 +898,9 @@ void * LJ_FASTCALL lj_mem_newgco(lua_State *L, GCSize size)
   lj_assertG(checkptrGC(o),
 	     "allocated memory address %p outside required range", o);
   g->gc.total += size;
+#ifdef COUNTS
+  g->gc.allocated += size;
+#endif
   setgcrefr(o->gch.nextgc, g->gc.root);
   setgcref(g->gc.root, o);
   newwhite(g, o);

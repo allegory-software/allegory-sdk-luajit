@@ -250,6 +250,9 @@ LUA_API lua_State *lua_newstate(lua_Alloc allocf, void *allocd)
   setgcref(g->gc.root, obj2gco(L));
   setmref(g->gc.sweep, &g->gc.root);
   g->gc.total = sizeof(GG_State);
+#ifdef COUNTS
+  g->gc.allocated = g->gc.total;
+#endif
   g->gc.pause = LUAI_GCPAUSE;
   g->gc.stepmul = LUAI_GCMUL;
   lj_dispatch_init((GG_State *)L);
@@ -319,6 +322,9 @@ lua_State *lj_state_new(lua_State *L)
   setgcrefr(L1->env, L->env);
   stack_init(L1, L);  /* init stack */
   lj_assertL(iswhite(obj2gco(L1)), "new thread object is not white");
+#ifdef COUNTS
+  G(L)->gc.thnum++;
+#endif
   return L1;
 }
 
@@ -331,5 +337,8 @@ void LJ_FASTCALL lj_state_free(global_State *g, lua_State *L)
   lj_assertG(gcref(L->openupval) == NULL, "stale open upvalues");
   lj_mem_freevec(g, tvref(L->stack), L->stacksize, TValue);
   lj_mem_freet(g, L);
+#ifdef COUNTS
+  g->gc.thnum--;
+#endif
 }
 
