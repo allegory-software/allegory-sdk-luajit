@@ -402,6 +402,7 @@ LJLIB_CF(debug_counts)
   lua_pushinteger(L, G(L)->gc.allocated);
   lua_pushinteger(L, G(L)->strnum);
   lua_pushinteger(L, G(L)->gc.tabnum);
+  lua_pushinteger(L, G(L)->gc.fnum);
   lua_pushinteger(L, G(L)->gc.thnum);
   lua_pushinteger(L, G(L)->gc.udatanum);
 #ifdef LJ_HASFFI
@@ -421,7 +422,7 @@ LJLIB_CF(debug_counts)
   lua_pushinteger(L, 0);
   lua_pushinteger(L, 0);
 #endif
-  return 12;
+  return 13;
 #else
   return 0;
 #endif
@@ -431,16 +432,8 @@ LJLIB_CF(debug_reset_counts) {
 #ifdef COUNTS
   G(L)->gc.freed = 0;
   G(L)->gc.allocated = 0;
-  G(L)->strnum = 0;
-  G(L)->gc.tabnum = 0;
-  G(L)->gc.thnum = 0;
-  G(L)->gc.udatanum = 0;
-#ifdef LJ_HASFFI
-  G(L)->gc.cdatanum = 0;
-#endif
 #if LJ_HASJIT
   jit_State *J = L2J(L);
-  J->tracenum = 0;
   J->nsnaprestore = 0;
   J->ntraceabort = 0;
 #endif
