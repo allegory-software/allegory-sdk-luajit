@@ -1,6 +1,6 @@
 /*
 ** Buffer handling.
-** Copyright (C) 2005-2021 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #ifndef _LJ_BUF_H
@@ -27,7 +27,8 @@ typedef struct SBufExt {
     MRef bsb;		/* Borrowed string buffer. */
   };
   char *r;		/* Read pointer. */
-  GCRef dict;		/* Serialization string dictionary table. */
+  GCRef dict_str;	/* Serialization string dictionary table. */
+  GCRef dict_mt;	/* Serialization metatable dictionary table. */
   int depth;		/* Remaining recursion depth. */
 } SBufExt;
 

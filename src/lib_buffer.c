@@ -1,6 +1,6 @@
 /*
 ** Buffer library.
-** Copyright (C) 2005-2021 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lib_buffer_c
@@ -76,6 +76,8 @@ LJLIB_CF(buffer_method_skip)		LJLIB_REC(.)
   MSize len = sbufxlen(sbx);
   if (n < len) {
     sbx->r += n;
+  } else if (sbufiscow(sbx)) {
+    sbx->r = sbx->w;
   } else {
     sbx->r = sbx->w = sbx->b;
   }
@@ -126,7 +128,7 @@ LJLIB_CF(buffer_method_put)		LJLIB_REC(.)
       lj_strfmt_putfnum((SBuf *)sbx, STRFMT_G14, numV(o));
     } else if (tvisbuf(o)) {
       SBufExt *sbx2 = bufV(o);
-      if (sbx2 == sbx) lj_err_arg(L, arg+1, LJ_ERR_BUFFER_SELF);
+      if (sbx2 == sbx) lj_err_arg(L, (int)(arg+1), LJ_ERR_BUFFER_SELF);
       lj_buf_putmem((SBuf *)sbx, sbx2->r, sbufxlen(sbx2));
     } else if (!mo && !tvisnil(mo = lj_meta_lookup(L, o, MM_tostring))) {
       /* Call __tostring metamethod inline. */
@@ -138,7 +140,7 @@ LJLIB_CF(buffer_method_put)		LJLIB_REC(.)
       L->top = L->base + narg;
       goto retry;  /* Retry with the result. */
     } else {
-      lj_err_argtype(L, arg+1, "string/number/__tostring");
+      lj_err_argtype(L, (int)(arg+1), "string/number/__tostring");
     }
     /* Probably not useful to inline other __tostring MMs, e.g. FFI numbers. */
   }
@@ -167,15 +169,15 @@ LJLIB_CF(buffer_method_get)		LJLIB_REC(.)
   for (arg = 1; arg < narg; arg++) {
     TValue *o = &L->base[arg];
     MSize n = tvisnil(o) ? LJ_MAX_BUF :
-	      (MSize) lj_lib_checkintrange(L, arg+1, 0, LJ_MAX_BUF);
+	      (MSize) lj_lib_checkintrange(L, (int)(arg+1), 0, LJ_MAX_BUF);
     MSize len = sbufxlen(sbx);
     if (n > len) n = len;
     setstrV(L, o, lj_str_new(L, sbx->r, n));
     sbx->r += n;
   }
-  if (sbx->r == sbx->w) sbx->r = sbx->w = sbx->b;
+  if (sbx->r == sbx->w && !sbufiscow(sbx)) sbx->r = sbx->w = sbx->b;
   lj_gc_check(L);
-  return narg-1;
+  return (int)(narg-1);
 }
 
 #if LJ_HASFFI
@@ -288,7 +290,7 @@ LJLIB_CF(buffer_new)
 {
   MSize sz = 0;
   int targ = 1;
-  GCtab *env, *dict = NULL;
+  GCtab *env, *dict_str = NULL, *dict_mt = NULL;
   GCudata *ud;
   SBufExt *sbx;
   if (L->base < L->top && !tvistab(L->base)) {
@@ -298,10 +300,16 @@ LJLIB_CF(buffer_new)
   }
   if (L->base+targ-1 < L->top) {
     GCtab *options = lj_lib_checktab(L, targ);
-    cTValue *opt_dict = lj_tab_getstr(options, lj_str_newlit(L, "dict"));
+    cTValue *opt_dict, *opt_mt;
+    opt_dict = lj_tab_getstr(options, lj_str_newlit(L, "dict"));
     if (opt_dict && tvistab(opt_dict)) {
-      dict = tabV(opt_dict);
-      lj_serialize_dict_prep(L, dict);
+      dict_str = tabV(opt_dict);
+      lj_serialize_dict_prep_str(L, dict_str);
+    }
+    opt_mt = lj_tab_getstr(options, lj_str_newlit(L, "metatable"));
+    if (opt_mt && tvistab(opt_mt)) {
+      dict_mt = tabV(opt_mt);
+      lj_serialize_dict_prep_mt(L, dict_mt);
     }
   }
   env = tabref(curr_func(L)->c.env);
@@ -312,8 +320,10 @@ LJLIB_CF(buffer_new)
   setudataV(L, L->top++, ud);
   sbx = (SBufExt *)uddata(ud);
   lj_bufx_init(L, sbx);
-  setgcref(sbx->dict, obj2gco(dict));
+  setgcref(sbx->dict_str, obj2gco(dict_str));
+  setgcref(sbx->dict_mt, obj2gco(dict_mt));
   if (sz > 0) lj_buf_need2((SBuf *)sbx, sz);
+  lj_gc_check(L);
   return 1;
 }
 
@@ -330,6 +340,7 @@ LJLIB_CF(buffer_decode)			LJLIB_REC(.)
   GCstr *str = lj_lib_checkstrx(L, 1);
   setnilV(L->top++);
   lj_serialize_decode(L, L->top-1, str);
+  lj_gc_check(L);
   return 1;
 }
 

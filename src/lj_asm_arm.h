@@ -1,6 +1,6 @@
 /*
 ** ARM IR assembler (SSA IR -> machine code).
-** Copyright (C) 2005-2021 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
 */
 
 /* -- Register allocator extensions --------------------------------------- */
@@ -313,7 +313,11 @@ static void asm_fusexref(ASMState *as, ARMIns ai, Reg rd, IRRef ref,
 }
 
 #if !LJ_SOFTFP
-/* Fuse to multiply-add/sub instruction. */
+/*
+** Fuse to multiply-add/sub instruction.
+** VMLA rounds twice (UMA, not FMA) -- no need to check for JIT_F_OPT_FMA.
+** VFMA needs VFPv4, which is uncommon on the remaining ARM32 targets.
+*/
 static int asm_fusemadd(ASMState *as, IRIns *ir, ARMIns ai, ARMIns air)
 {
   IRRef lref = ir->op1, rref = ir->op2;
@@ -1133,6 +1137,7 @@ static void asm_ahuvload(ASMState *as, IRIns *ir)
   }
   idx = asm_fuseahuref(as, ir->op1, &ofs, allow,
 		       (!LJ_SOFTFP && t == IRT_NUM) ? 1024 : 4096);
+  if (ir->o == IR_VLOAD) ofs += 8 * ir->op2;
   if (!hiop || type == RID_NONE) {
     rset_clear(allow, idx);
     if (ofs < 256 && ra_hasreg(dest) && (dest & 1) == 0 &&
@@ -1249,7 +1254,12 @@ dotypecheck:
       }
     }
     asm_guardcc(as, t == IRT_NUM ? CC_HS : CC_NE);
-    emit_n(as, ARMI_CMN|ARMI_K12|-irt_toitype_(t), type);
+    if ((ir->op2 & IRSLOAD_KEYINDEX)) {
+      emit_n(as, ARMI_CMN|ARMI_K12|1, type);
+      emit_dn(as, ARMI_EOR^emit_isk12(ARMI_EOR, ~LJ_KEYINDEX), type, type);
+    } else {
+      emit_n(as, ARMI_CMN|ARMI_K12|-irt_toitype_(t), type);
+    }
   }
   if (ra_hasreg(dest)) {
 #if !LJ_SOFTFP
@@ -1884,15 +1894,15 @@ static void asm_int64comp(ASMState *as, IRIns *ir)
 }
 #endif
 
-/* -- Support for 64 bit ops in 32 bit mode ------------------------------- */
+/* -- Split register ops -------------------------------------------------- */
 
-/* Hiword op of a split 64 bit op. Previous op must be the loword op. */
+/* Hiword op of a split 32/32 bit op. Previous op is the loword op. */
 static void asm_hiop(ASMState *as, IRIns *ir)
 {
-#if LJ_HASFFI || LJ_SOFTFP
   /* HIOP is marked as a store because it needs its own DCE logic. */
   int uselo = ra_used(ir-1), usehi = ra_used(ir);  /* Loword/hiword used? */
   if (LJ_UNLIKELY(!(as->flags & JIT_F_OPT_DCE))) uselo = usehi = 1;
+#if LJ_HASFFI || LJ_SOFTFP
   if ((ir-1)->o <= IR_NE) {  /* 64 bit integer or FP comparisons. ORDER IR. */
     as->curins--;  /* Always skip the loword comparison. */
 #if LJ_SOFTFP
@@ -1923,6 +1933,7 @@ static void asm_hiop(ASMState *as, IRIns *ir)
       asm_xstore_(as, ir, 4);
     return;
   }
+#endif
   if (!usehi) return;  /* Skip unused hiword op for all remaining ops. */
   switch ((ir-1)->o) {
 #if LJ_HASFFI
@@ -1941,6 +1952,9 @@ static void asm_hiop(ASMState *as, IRIns *ir)
     asm_intneg(as, ir, ARMI_RSC);
     asm_intneg(as, ir-1, ARMI_RSB|ARMI_S);
     break;
+  case IR_CNEWI:
+    /* Nothing to do here. Handled by lo op itself. */
+    break;
 #endif
 #if LJ_SOFTFP
   case IR_SLOAD: case IR_ALOAD: case IR_HLOAD: case IR_ULOAD: case IR_VLOAD:
@@ -1948,25 +1962,16 @@ static void asm_hiop(ASMState *as, IRIns *ir)
     if (!uselo)
       ra_allocref(as, ir->op1, RSET_GPR);  /* Mark lo op as used. */
     break;
+  case IR_ASTORE: case IR_HSTORE: case IR_USTORE: case IR_TOSTR: case IR_TMPREF:
+    /* Nothing to do here. Handled by lo op itself. */
+    break;
 #endif
-  case IR_CALLN:
-  case IR_CALLS:
-  case IR_CALLXS:
+  case IR_CALLN: case IR_CALLL: case IR_CALLS: case IR_CALLXS:
     if (!uselo)
       ra_allocref(as, ir->op1, RID2RSET(RID_RETLO));  /* Mark lo op as used. */
     break;
-#if LJ_SOFTFP
-  case IR_ASTORE: case IR_HSTORE: case IR_USTORE: case IR_TOSTR: case IR_TMPREF:
-#endif
-  case IR_CNEWI:
-    /* Nothing to do here. Handled by lo op itself. */
-    break;
   default: lj_assertA(0, "bad HIOP for op %d", (ir-1)->o); break;
   }
-#else
-  /* Unused without SOFTFP or FFI. */
-  UNUSED(as); UNUSED(ir); lj_assertA(0, "unexpected HIOP");
-#endif
 }
 
 /* -- Profiling ----------------------------------------------------------- */
@@ -2068,6 +2073,8 @@ static void asm_stack_restore(ASMState *as, SnapShot *snap)
       } else if ((sn & SNAP_SOFTFPNUM)) {
 	type = ra_alloc1(as, ref+1, rset_exclude(RSET_GPRODD, RID_BASE));
 #endif
+      } else if ((sn & SNAP_KEYINDEX)) {
+	type = ra_allock(as, (int32_t)LJ_KEYINDEX, odd);
       } else {
 	type = ra_allock(as, (int32_t)irt_toitype(ir->t), odd);
       }
@@ -2127,6 +2134,12 @@ static void asm_loop_fixup(ASMState *as)
   } else {
     p[-1] = ARMI_B | ((uint32_t)((target-p)-1) & 0x00ffffffu);
   }
+}
+
+/* Fixup the tail of the loop. */
+static void asm_loop_tail_fixup(ASMState *as)
+{
+  UNUSED(as);  /* Nothing to do. */
 }
 
 /* -- Head of trace ------------------------------------------------------- */
