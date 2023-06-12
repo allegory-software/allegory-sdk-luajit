@@ -276,6 +276,10 @@ LUA_API void lua_setallocf (lua_State *L, lua_Alloc f, void *ud);
 #define lua_pushliteral(L, s)	\
 	lua_pushlstring(L, "" s, (sizeof(s)/sizeof(char))-1)
 
+// PATCH: define lua_pushglobaltable macro, taken from upstream
+#define lua_pushglobaltable(L) \
+  lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_GLOBALSINDEX)
+
 #define lua_setglobal(L,s)	lua_setfield(L, LUA_GLOBALSINDEX, (s))
 #define lua_getglobal(L,s)	lua_getfield(L, LUA_GLOBALSINDEX, (s))
 
