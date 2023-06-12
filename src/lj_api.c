@@ -823,11 +823,12 @@ LUA_API void lua_getfield(lua_State *L, int idx, const char *k)
   incr_top(L);
 }
 
-LUA_API void lua_rawget(lua_State *L, int idx)
+LUA_API int lua_rawget(lua_State *L, int idx) // PATCH: return value changed to int
 {
   cTValue *t = index2adr(L, idx);
   lj_checkapi(tvistab(t), "stack slot %d is not a table", idx);
   copyTV(L, L->top-1, lj_tab_get(L, tabV(t), L->top-1));
+  return itype(L->top-1);  // PATCH: return type of value
 }
 
 LUA_API void lua_rawgeti(lua_State *L, int idx, int n)
