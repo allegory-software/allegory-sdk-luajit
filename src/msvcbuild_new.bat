@@ -1,5 +1,5 @@
 @rem Script to build LuaJIT with MSVC.
-@rem Copyright (C) 2005-2017 Mike Pall. See Copyright Notice in luajit.h
+@rem Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 @rem
 @rem Either open a "Visual Studio .NET Command Prompt"
 @rem (Note that the Express Edition does not contain an x64 compiler)
@@ -50,6 +50,9 @@ if exist minilua.exe.manifest^
 @set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_GC64
 minilua %DASM% -LN %DASMFLAGS% -o host\buildvm_arch.h %DASC%
 @if errorlevel 1 goto :BAD
+
+git show -s --format="%%ct" >luajit_relver.txt
+minilua host\genversion.lua
 
 %LJCOMPILE% /I "." /I %DASMDIR% host\buildvm*.c
 @if errorlevel 1 goto :BAD
