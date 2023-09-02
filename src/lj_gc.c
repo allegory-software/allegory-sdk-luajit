@@ -574,7 +574,8 @@ static size_t traverse_udata(global_State *g, GCAudata *a, size_t threshold)
       a->mark[i] |= flags2bitmask(obj2gco(ud), j);
       if (mt)
         gc_mark_tab(g, mt);
-      gc_mark_tab(g, tabref(ud->env));
+      if (ud->udtype != UDTYPE_TYPED)
+        gc_mark_tab(g, tabref(ud->env));
       if (LJ_HASBUFFER && ud->udtype == UDTYPE_BUFFER) {
         SBufExt *sbx = (SBufExt *)uddata(ud);
         if (sbufiscow(sbx) && gcref(sbx->cowref))
@@ -1296,7 +1297,9 @@ static void gc_sweep_udata_obj(global_State *g, GCAudata *a, uint32_t i,
   GCudata *base = aobj(a, GCudata, i << 6);
   for (uint32_t j = tzcount64(f); f; f = reset_lowest64(f), j = tzcount64(f)) {
     GCudata *ud = &base[j];
-    if (!(ud->gcflags & LJ_GC_MARK_MASK) && ud->len > 0) {
+    if (ud->udtype == UDTYPE_TYPED) {
+      ((struct lua_typeduserdatainfo*)gcrefu(ud->env))->release(uddata(ud));
+    } else if (!(ud->gcflags & LJ_GC_MARK_MASK) && ud->len > 0) {
       g->gc.malloc -= ud->len;
       g->allocf(g->allocd, uddata(ud), ud->len, 0);
     }
