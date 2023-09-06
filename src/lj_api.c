@@ -25,6 +25,7 @@
 #include "lj_vm.h"
 #include "lj_strscan.h"
 #include "lj_strfmt.h"
+#include "luacpp.h"
 
 /* -- Common helper functions --------------------------------------------- */
 
@@ -1384,4 +1385,40 @@ LUA_API void lua_setallocf(lua_State *L, lua_Alloc f, void *ud)
 LUA_API size_t luaJIT_getpagesize()
 {
   return ARENA_SIZE;
+}
+
+LUA_API uint64_t lj_internal_getstack(lua_State *L, int index)
+{
+  TValue *o = index2adr(L, index);
+  return o->u64;
+}
+
+LUA_API void lj_internal_setstack(lua_State *L, int index, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copy_slot(L, &t, index);
+}
+
+LUA_API void lj_internal_pushraw(lua_State *L, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copyTV(L, L->top, &t);
+  incr_top(L);
+}
+
+LUA_API void *lj_internal_mt__index(const lua_State *L, void *mt)
+{
+  return (void *)lj_meta_fast(L, (GCtab *)mt, MM_index);
+}
+
+LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n)
+{
+  return lj_str_new((lua_State*)L, s, n);
+}
+
+LUA_API void *lj_internal_newtab(const lua_State *L)
+{
+  return lj_tab_new((lua_State *)L, 0, 0);
 }
