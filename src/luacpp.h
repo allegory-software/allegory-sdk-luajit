@@ -15,8 +15,10 @@ extern "C" {
 #include "luajit.h"
 }
 #include <bit>
+#include <optional>
 #include <stdint.h>
 #include <string_view>
+#include <vector>
 
 namespace lua
 {
@@ -227,7 +229,7 @@ public:
 
   void *typed_ptr(uint32_t type) const;
 
-  template<typename T> T *as() const { return (T *)typed_ptr(T::kLuaType); }
+  template <typename T> T *as() const { return (T *)typed_ptr(T::kLuaType); }
 
   table getmetatable() const;
 
@@ -367,6 +369,436 @@ inline uint32_t hash_alg(uint32_t lo, uint32_t hi)
 #endif
   return hi;
 }
+
+template <typename T> struct traits;
+
+template <> struct traits<bool> {
+  static int push(lua_State *L, bool v)
+  {
+    lua_pushboolean(L, v);
+    return 1;
+  }
+  static std::pair<bool, bool> tryget(lua_State *L, int idx)
+  {
+    return std::make_pair(true, (bool)lua_toboolean(L, idx));
+  }
+  static bool get(lua_State *L, int idx) { return (bool)lua_toboolean(L, idx); }
+};
+
+template <> struct traits<lua_State *> {
+  static std::pair<bool, lua_State *> tryget(lua_State *L, int idx)
+  {
+    lua_State *s = lua_tothread(L, idx);
+    return std::make_pair(!!s, s);
+  }
+  static bool get(lua_State *L, int idx)
+  {
+    luaL_checktype(L, idx, LUA_TTHREAD);
+    return lua_tothread(L, idx);
+  }
+};
+
+template <> struct traits<void *> {
+  static int push(lua_State *L, void *v)
+  {
+    lua_pushlightuserdata(L, v);
+    return 1;
+  }
+};
+
+template <> struct traits<std::nullptr_t> {
+  static int push(lua_State *L, std::nullptr_t)
+  {
+    lua_pushnil(L);
+    return 1;
+  }
+};
+
+template <> struct traits<value> {
+  static int push(lua_State *L, value v)
+  {
+    v.push(L);
+    return 1;
+  }
+  static std::pair<bool, double> tryget(lua_State *L, int idx)
+  {
+    return std::make_pair(true, value(L, idx));
+  }
+  static value get(lua_State *L, int idx) { return value(L, idx); }
+};
+
+template <> struct traits<table> {
+  static int push(lua_State *L, value v)
+  {
+    v.push(L);
+    return 1;
+  }
+  static std::pair<bool, double> tryget(lua_State *L, int idx)
+  {
+    table t(value(L, idx));
+    return std::make_pair(t, t);
+  }
+  static table get(lua_State *L, int idx) { return table(value(L, idx)); }
+};
+
+template <> struct traits<string> {
+  static int push(lua_State *L, value v)
+  {
+    v.push(L);
+    return 1;
+  }
+  static std::pair<bool, double> tryget(lua_State *L, int idx)
+  {
+    string s(value(L, idx));
+    return std::make_pair(s, s);
+  }
+  static string get(lua_State *L, int idx) { return string(value(L, idx)); }
+};
+
+template <typename T>
+concept is_stringlike = requires(T &&t) {
+  new char[2 - sizeof(std::decay_t<std::remove_pointer_t<
+                          decltype(std::declval<T>().data())>>)];
+  t.size();
+  t.data();
+};
+
+template <is_stringlike T> struct traits<T> {
+  using value_type =
+      std::decay_t<std::remove_pointer_t<decltype(std::declval<T>().data())>>;
+  static int push(lua_State *L, const T &v)
+  {
+    lua_pushlstring(L, v.data(), v.size());
+    return 1;
+  }
+
+  static std::pair<bool, T> tryget(lua_State *L, int idx)
+  {
+    size_t n;
+    const char *s = lua_tolstring(L, idx, &n);
+    return std::make_pair(!!s, T(std::bit_cast<const value_type *>(s), n));
+  }
+  static T get(lua_State *L, int idx)
+  {
+    size_t n;
+    const char *s = luaL_checklstring(L, idx, &n);
+    return T(s, n);
+  }
+};
+
+template <> struct traits<const char *> {
+  static int push(lua_State *L, const char *v)
+  {
+    lua_pushstring(L, v);
+    return 1;
+  }
+
+  static std::pair<bool, const char *> tryget(lua_State *L, int idx)
+  {
+    const char *s = lua_tostring(L, idx);
+    return std::make_pair(!!s, s);
+  }
+  static const char *get(lua_State *L, int idx)
+  {
+    return luaL_checkstring(L, idx);
+  }
+};
+
+template <std::floating_point T> struct traits<T> {
+  static int push(lua_State *L, T v)
+  {
+    lua_pushnumber(L, v);
+    return 1;
+  }
+
+  static std::pair<bool, T> tryget(lua_State *L, int idx)
+  {
+    int ok;
+    lua_Number v = lua_tonumberx(L, idx, &ok);
+    return std::make_pair(!!ok, static_cast<T>(v));
+  }
+  static T get(lua_State *L, int idx)
+  {
+    return static_cast<T>(lua_tonumber(L, idx));
+  }
+};
+
+template <std::signed_integral T> struct traits<T> {
+  static int push(lua_State *L, T v)
+  {
+    lua_pushinteger(L, v);
+    return 1;
+  }
+
+  static std::pair<bool, T> tryget(lua_State *L, int idx)
+  {
+    int ok;
+    lua_Integer v = lua_tointegerx(L, idx, &ok);
+    return std::make_pair(!!ok, static_cast<T>(v));
+  }
+  static T get(lua_State *L, int idx)
+  {
+    return static_cast<T>(lua_tonumber(L, idx));
+  }
+};
+
+template <std::unsigned_integral T> struct traits<T> {
+  static int push(lua_State *L, T v)
+  {
+    lua_pushinteger(L, v);
+    return 1;
+  }
+
+  static std::pair<bool, T> tryget(lua_State *L, int idx)
+  {
+    int ok;
+    lua_Integer v = lua_tointegerx(L, idx, &ok);
+    return std::make_pair(!!ok, static_cast<T>(v));
+  }
+  static T get(lua_State *L, int idx) { return static_cast<T>(lua_tonumber(L, idx)); }
+};
+
+template <typename T>
+concept is_typed_userdata_impl = requires()
+{
+  {
+    T::kLuaTypeInfo
+  } -> std::convertible_to<lua_typeduserdatainfo>;
+};
+
+
+template <is_typed_userdata_impl T> struct traits<T *> {
+  static std::pair<bool, T *> tryget(lua_State *L, int idx)
+  {
+    T *p = (T *)lua_totypeduserdata(L, idx, T::kLuaTypeInfo.type_id);
+    return std::make_pair(!!p, p);
+  }
+  static T *get(lua_State *L, int idx)
+  {
+    T *p = (T *)lua_totypeduserdata(L, idx, T::kLuaTypeInfo.type_id);
+    return p;
+  }
+};
+
+template<typename T> struct traits<std::optional<T>> {
+  static std::optional<T> get(lua_State *L, int idx)
+  {
+    auto v = traits<T>::tryget(L, idx);
+    return v.first ? std::optional<T>(v.second) : std::nullopt;
+  }
+};
+
+template <typename T, typename U> struct traits<std::pair<T, U>> {
+  static int push(lua_State *L, const std::pair<T, U>& v)
+  {
+    int n = traits<T>::push(L, v.first);
+    return n + traits<U>::push(L, v.second);
+  }
+};
+
+template <typename Tuple, class F, std::size_t... I>
+constexpr auto LuaCallFn(lua_State *L, F &&f, std::index_sequence<I...>)
+{
+  return std::invoke(
+      std::forward<F>(f),
+      traits<std::remove_reference_t<std::decay_t<
+          typename std::tuple_element<I, Tuple>::type>>>::get(L, I + 1)...);
+}
+
+template <typename Tuple, class F, std::size_t... I>
+constexpr auto LuaCallFnL(lua_State *L, F &&f, std::index_sequence<I...>)
+{
+  return std::invoke(
+      std::forward<F>(f), L,
+      traits<std::remove_reference_t<std::decay_t<
+          typename std::tuple_element<I, Tuple>::type>>>::get(L, I + 1)...);
+}
+
+template <unsigned incr, typename Tuple, typename C, class F, std::size_t... I>
+constexpr auto LuaCallFn(C *c, lua_State *L, F &&f, std::index_sequence<I...>)
+{
+  return std::invoke(
+      std::forward<F>(f), c,
+      traits<std::remove_reference_t<std::decay_t<
+          typename std::tuple_element<I, Tuple>::type>>>::get(L, I + incr)...);
+}
+
+template <unsigned incr, typename Tuple, typename C, class F, std::size_t... I>
+constexpr auto LuaCallFnL(C *c, lua_State *L, F &&f, std::index_sequence<I...>)
+{
+  return std::invoke(
+      std::forward<F>(f), c, L,
+      traits<std::remove_reference_t<std::decay_t<
+          typename std::tuple_element<I, Tuple>::type>>>::get(L, I + incr)...);
+}
+
+template <typename... Args>
+inline void PushFunctor(lua_State *L, void (*fn)(Args...))
+{
+  lua_pushlightuserdata(L, fn);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        void (*fn)(Args...) =
+            (void (*)(Args...))lua_touserdata(L, lua_upvalueindex(1));
+        LuaCallFn<std::tuple<Args...>>(
+            L, fn, std::make_index_sequence<sizeof...(Args)>{});
+        return 0;
+      },
+      1);
+}
+
+template <typename R, typename... Args>
+inline void PushFunctor(lua_State *L, R (*fn)(Args...))
+{
+  lua_pushlightuserdata(L, fn);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        R(*fn)
+        (Args...) = (R(*)(Args...))lua_touserdata(L, lua_upvalueindex(1));
+        return traits<R>::push(
+            L, LuaCallFn<std::tuple<Args...>>(
+                   L, fn, std::make_index_sequence<sizeof...(Args)>{}));
+      },
+      1);
+}
+
+template <typename R, typename... Args>
+inline void PushFunctor(lua_State *L, R (*fn)(lua_State *, Args...))
+{
+  lua_pushlightuserdata(L, fn);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        R(*fn)
+        (lua_State *, Args...) =
+            (R(*)(lua_State *, Args...))lua_touserdata(L, lua_upvalueindex(1));
+        return LuaCallFnL<std::tuple<Args...>>(
+            L, fn, std::make_index_sequence<sizeof...(Args)>{});
+      },
+      1);
+}
+
+template <typename C, typename... Args>
+inline void PushFunctor(lua_State *L, void (C::*fn)(Args...))
+{
+  static_assert(sizeof(fn) <= 2 * sizeof(void *));
+  void *fnraw[2] = {0, 0};
+  memcpy(fnraw, &fn, sizeof(fn));
+
+  lua_pushlightuserdata(L, fnraw[0]);
+  lua_pushlightuserdata(L, fnraw[1]);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        C *c = C::TryCast(L, 1);
+        if (!c)
+          return luaL_error(L, "Expected object");
+
+        void *raw[2] = {lua_touserdata(L, lua_upvalueindex(1)),
+                        lua_touserdata(L, lua_upvalueindex(2))};
+        void (C::*fn)(Args...);
+        memcpy(&fn, raw, sizeof(fn));
+        LuaCallFn<2, std::tuple<Args...>>(
+            c, L, fn, std::make_index_sequence<sizeof...(Args)>{});
+        return 0;
+      },
+      2);
+}
+
+template <typename R, typename C, typename... Args>
+inline void PushFunctor(lua_State *L, R (C::*fn)(Args...))
+{
+  static_assert(sizeof(fn) <= 2 * sizeof(void *));
+  void *fnraw[2] = {0, 0};
+  memcpy(fnraw, &fn, sizeof(fn));
+
+  lua_pushlightuserdata(L, fnraw[0]);
+  lua_pushlightuserdata(L, fnraw[1]);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        C *c = C::TryCast(L, 1);
+        if (!c)
+          return luaL_error(L, "Expected object");
+
+        void *raw[2] = {lua_touserdata(L, lua_upvalueindex(1)),
+                        lua_touserdata(L, lua_upvalueindex(2))};
+        R (C::*fn)(Args...);
+        memcpy(&fn, raw, sizeof(fn));
+        return traits<R>::push(
+            L, LuaCallFn<2, std::tuple<Args...>>(
+                   c, L, fn, std::make_index_sequence<sizeof...(Args)>{}));
+      },
+      2);
+}
+
+template <typename R, typename C, typename... Args>
+inline void PushFunctor(lua_State *L, R (C::*fn)(lua_State *, Args...))
+{
+  void *fnraw[2];
+  static_assert(sizeof(fn) <= fnraw);
+  memcpy(fnraw, &fn, sizeof(fn));
+
+  lua_pushlightuserdata(L, fnraw[0]);
+  lua_pushlightuserdata(L, fnraw[1]);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        C *c = C::TryCast(L, 1);
+        if (!c)
+          return luaL_error(L, "Expected object");
+
+        void *raw[2] = {lua_touserdata(L, lua_upvalueindex(1)),
+                        lua_touserdata(L, lua_upvalueindex(2))};
+        R (C::*fn)(Args...);
+        memcpy(&fn, raw, sizeof(fn));
+        return LuaCallFn<2, std::tuple<Args...>>(
+            c, L, fn, std::make_index_sequence<sizeof...(Args)>{});
+      },
+      2);
+}
+
+inline void PushFunctor(lua_State *L, lua_CFunction fn)
+{
+  lua_pushcfunction(L, fn);
+}
+
+template <typename C>
+inline void PushFunctor(lua_State *L, int (C::*fn)(lua_State *))
+{
+  static_assert(sizeof(fn) <= 2 * sizeof(void *));
+  void *fnraw[2] = {0, 0};
+  memcpy(fnraw, &fn, sizeof(fn));
+
+  lua_pushlightuserdata(L, fnraw[0]);
+  lua_pushlightuserdata(L, fnraw[1]);
+  lua_pushcclosure(
+      L,
+      [](lua_State *L) -> int {
+        C *c = C::TryCast(L, 1);
+        if (!c)
+          return luaL_error(L, "Expected object");
+        void *raw[2] = {lua_touserdata(L, lua_upvalueindex(1)),
+                        lua_touserdata(L, lua_upvalueindex(2))};
+        int (C::*fn)(lua_State *);
+        memcpy(&fn, raw, sizeof(fn));
+        return (c->*fn)(L);
+      },
+      2);
+}
+
+template <typename R, typename... Args> struct traits<R (*)(Args...)> {
+  static void push(lua_State *L, R (*v)(Args...)) { PushFunctor(L, v); }
+};
+
+template <typename R, typename C, typename... Args>
+struct traits<R (C::*)(Args...)> {
+  static void push(lua_State *L, R (C::*v)(Args...)) { PushFunctor(L, v); }
+};
+
+
 } // namespace details
 
 inline value::value(lua_State *L, int index)
@@ -535,6 +967,26 @@ inline bool table::iterator::operator==(std::default_sentinel_t) const
 inline mut_table::mut_table(const lua_State *L)
     : table((details::_lj_tab *)lj_internal_newtab(L))
 {
+}
+
+// Push all the things. Universal multi-pusher. Pushes left to right (rightmost
+// ends up on top).
+template <typename... T> void push(lua_State *L, T... v)
+{
+  (details::traits<T>::push(L, v), ...);
+}
+
+template <typename T> bool tryget(lua_State *L, int idx, T &v)
+{
+  auto x = details::traits<T>::tryget(L, idx);
+  v = x.second;
+  return x.first;
+}
+
+template <details::is_typed_userdata_impl T>
+void newuserdata(lua_State *L, T *obj)
+{
+  lua_newtypeduserdata(L, obj, &T::kLuaTypeInfo);
 }
 
 } // namespace lua
