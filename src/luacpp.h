@@ -105,6 +105,7 @@ protected:
   friend string;
   friend table;
   friend userdata;
+  friend mut_table;
 
   uintptr_t tv = ~0ull;
 };
@@ -191,6 +192,7 @@ protected:
 
   friend value;
   friend userdata;
+  friend mut_table;
   details::_lj_tab *o = nullptr;
 };
 
@@ -203,6 +205,9 @@ public:
   mut_table() = default;
   mut_table(const mut_table &o) = default;
   explicit mut_table(const lua_State *L);
+
+  void rawset(const lua_State *L, value k, value v);
+  void setmetatable(const lua_State *L, table t);
 };
 
 class thread
@@ -271,6 +276,8 @@ LUA_API void lj_internal_pushraw(lua_State *L, uint64_t tv);
 LUA_API void *lj_internal_mt__index(const lua_State *L, void *mt);
 LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n);
 LUA_API void *lj_internal_newtab(const lua_State *L);
+LUA_API void lj_internal_rawset(const lua_State *L, void *t, uint64_t k, uint64_t v);
+LUA_API void lj_internal_setmetatable(const lua_State *L, void *t, void *mt);
 LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name,
                                  size_t namelen, const char *cdef, void *impl);
 #ifdef __cplusplus
@@ -434,21 +441,38 @@ template <> struct traits<value> {
   static value get(lua_State *L, int idx) { return value(L, idx); }
 };
 
-template <> struct traits<table> {
-  static int push(lua_State *L, value v)
+template<>
+struct traits<table>
+{
+  static int push(lua_State *L, table v)
   {
-    v.push(L);
-    return 1;
+	value(v).push(L);
+	return 1;
   }
   static std::pair<bool, double> tryget(lua_State *L, int idx)
   {
-    table t(value(L, idx));
-    return std::make_pair(t, t);
+	table t(value(L, idx));
+	return std::make_pair(t, t);
   }
-  static table get(lua_State *L, int idx) { return table(value(L, idx)); }
+  static table get(lua_State *L, int idx)
+  {
+	return table(value(L, idx));
+  }
 };
 
-template <> struct traits<string> {
+template<>
+struct traits<mut_table>
+{
+  static int push(lua_State *L, mut_table v)
+  {
+	value(v).push(L);
+	return 1;
+  }
+};
+
+template<>
+struct traits<string>
+{
   static int push(lua_State *L, value v)
   {
     v.push(L);
@@ -1014,6 +1038,7 @@ inline value::value(userdata o)
 {
 }
 
+
 inline void value::push(lua_State *L) { lj_internal_pushraw(L, tv); }
 
 template <unsigned t> inline void *value::toobj()
@@ -1161,6 +1186,16 @@ inline mut_table::mut_table(const lua_State *L)
     : table((details::_lj_tab *)lj_internal_newtab(L))
 {
 }
+
+inline void mut_table::rawset(const lua_State *L, value k, value v)
+{
+  lj_internal_rawset(L, o, k.tv, v.tv);
+}
+inline void mut_table::setmetatable(const lua_State *L, table t)
+{
+  lj_internal_setmetatable(L, o, t.o);
+}
+
 
 // Push all the things. Universal multi-pusher. Pushes left to right (rightmost
 // ends up on top).

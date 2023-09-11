@@ -1424,6 +1424,28 @@ LUA_API void *lj_internal_newtab(const lua_State *L)
   return lj_tab_new((lua_State *)L, 0, 0);
 }
 
+LUA_API void lj_internal_rawset(const lua_State *cL, void *t, uint64_t k, uint64_t v)
+{
+  lua_State *L = (lua_State *)cL;
+  TValue key, val;
+  TValue *dst;
+  key.u64 = k;
+  val.u64 = v;
+  dst = lj_tab_set(L, (GCtab*)t, &key);
+  copyTV(L, dst, &val);
+  lj_gc_anybarriert(L, t);
+}
+
+LUA_API void lj_internal_setmetatable(const lua_State *cL, void *rawt, void *rawmt)
+{
+  GCtab *t = (GCtab *)rawt;
+  GCtab *mt = (GCtab *)rawmt;
+  lua_State *L = (lua_State *)cL;
+  setgcref(t->metatable, obj2gco(mt));
+  if(mt)
+	lj_gc_objbarriert(L, t, mt);
+}
+
 LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name, size_t namelen,
     const char *cdef, void *impl)
 {
