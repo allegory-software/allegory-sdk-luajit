@@ -25,6 +25,7 @@
 #include "lj_vm.h"
 #include "lj_strscan.h"
 #include "lj_strfmt.h"
+#include "lj_clib.h"
 #include "luacpp.h"
 
 /* -- Common helper functions --------------------------------------------- */
@@ -1421,4 +1422,13 @@ LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n)
 LUA_API void *lj_internal_newtab(const lua_State *L)
 {
   return lj_tab_new((lua_State *)L, 0, 0);
+}
+
+LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name, size_t namelen,
+    const char *cdef, void *impl)
+{
+  GCstr *namestr = name ? lj_str_new(L, name, namelen) : NULL;
+  if (!!name != !!impl)
+    return LUA_ERRERR;
+  return lj_clib_define_symbol(L, (CLibrary *)clib, cdef, namestr, impl);
 }

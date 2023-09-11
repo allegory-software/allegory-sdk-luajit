@@ -14,11 +14,13 @@ extern "C" {
 #include "lua.h"
 #include "luajit.h"
 }
+#include <array>
 #include <bit>
 #include <optional>
 #include <stdint.h>
 #include <string_view>
 #include <vector>
+#include <span>
 
 namespace lua
 {
@@ -223,6 +225,7 @@ public:
   userdata() = default;
   userdata(const userdata &o) = default;
   userdata(value o);
+  userdata(lua_State *L, int idx);
 
   operator bool() const { return !!o; }
   void *ptr() const;
@@ -232,6 +235,8 @@ public:
   template <typename T> T *as() const { return (T *)typed_ptr(T::kLuaType); }
 
   table getmetatable() const;
+
+  bool istype(int type) const;
 
 protected:
   friend value;
@@ -266,6 +271,8 @@ LUA_API void lj_internal_pushraw(lua_State *L, uint64_t tv);
 LUA_API void *lj_internal_mt__index(const lua_State *L, void *mt);
 LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n);
 LUA_API void *lj_internal_newtab(const lua_State *L);
+LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name,
+                                 size_t namelen, const char *cdef, void *impl);
 #ifdef __cplusplus
 }
 
@@ -798,6 +805,188 @@ struct traits<R (C::*)(Args...)> {
   static void push(lua_State *L, R (C::*v)(Args...)) { PushFunctor(L, v); }
 };
 
+namespace ct
+{
+template <size_t N> struct static_array {
+  consteval static_array(const std::string &s)
+  {
+    if (s.size() != N)
+      throw;
+    for (size_t i = 0; i < s.size(); ++i)
+      arr[i] = s[i];
+    if (N == 0)
+      arr[0] = 0;
+  }
+
+  constexpr size_t size() const { return N; }
+  constexpr const char *str() const { return arr; }
+
+  char arr[N == 0 ? 1 : N] = {};
+};
+template <typename T> consteval size_t static_size(T v) { return v.size(); }
+
+consteval bool is_ident_char(char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+consteval std::pair<std::string_view, std::string_view>
+LuaExtractName(const char *&s)
+{
+  // Expect names in the format name or &name or &class::name;
+  while (*s == ' ' || *s == '\t')
+    s++;
+  if (*s == '&')
+    s++;
+  while (*s == ' ' || *s == '\t')
+    s++;
+
+  std::string_view first;
+  const char *p = s;
+  while (is_ident_char(*s))
+    s++;
+  first = std::string_view(p, s);
+  while (*s == ' ' || *s == '\t')
+    s++;
+  bool is_class = (*s == ':');
+  if (is_class) {
+    s += 2;
+    while (*s == ' ' || *s == '\t')
+      s++;
+    const char *p = s;
+    while (is_ident_char(*s))
+      s++;
+    return std::make_pair(first, std::string_view(p, s));
+  }
+  return std::make_pair("", first);
+}
+
+consteval std::string LuaBreakName(const char *s)
+{
+  auto n = LuaExtractName(s);
+  if (n.second.starts_with("lua_"))
+    n.second = n.second.substr(4);
+
+  std::string r = std::string(n.first) + std::string(n.second);
+  return r;
+}
+
+consteval std::vector<std::pair<std::string_view, std::string_view>>
+LuaBreakNames(const char *s)
+{
+  std::vector<std::pair<std::string_view, std::string_view>> v;
+  while (*s) {
+    auto n = LuaExtractName(s);
+    if (n.second.starts_with("lua_"))
+      n.second = n.second.substr(4);
+    v.push_back(n);
+    while (*s == ' ' || *s == '\t')
+      s++;
+    if (*s == ',')
+      s++;
+  }
+  return v;
+}
+
+
+template <typename T> struct TypeName;
+template <> struct TypeName<void> {
+  static constexpr char kType[] = "void";
+};
+template <> struct TypeName<bool> {
+  static constexpr char kType[] = "bool";
+};
+template <> struct TypeName<char> {
+  static constexpr char kType[] = "char";
+};
+template <> struct TypeName<int8_t> {
+  static constexpr char kType[] = "int8_t";
+};
+template <> struct TypeName<int16_t> {
+  static constexpr char kType[] = "int16_t";
+};
+template <> struct TypeName<int32_t> {
+  static constexpr char kType[] = "int32_t";
+};
+template <> struct TypeName<int64_t> {
+  static constexpr char kType[] = "int64_t";
+};
+template <> struct TypeName<uint8_t> {
+  static constexpr char kType[] = "uint8_t";
+};
+template <> struct TypeName<uint16_t> {
+  static constexpr char kType[] = "uint16_t";
+};
+template <> struct TypeName<uint32_t> {
+  static constexpr char kType[] = "uint32_t";
+};
+template <> struct TypeName<uint64_t> {
+  static constexpr char kType[] = "uint64_t";
+};
+template <> struct TypeName<float> {
+  static constexpr char kType[] = "float";
+};
+template <> struct TypeName<double> {
+  static constexpr char kType[] = "double";
+};
+template <> struct TypeName<const char *> {
+  static constexpr char kType[] = "const char*";
+};
+
+consteval std::string GetParams() { return ""; }
+
+template <typename A0, typename... Args>
+consteval std::string GetParams(A0 a0, Args... args)
+{
+  std::string s = TypeName<A0>::kType;
+  if (sizeof...(args) > 0)
+    s += ", " + GetParams(args...);
+  return s;
+}
+
+template <size_t N, typename T>
+consteval std::array<T, N> to_joined_array(std::vector<T> v)
+{
+  std::array<T, N> arr;
+  for (size_t i = 0; i < N; i++)
+    arr[i] = v[i];
+  return arr;
+}
+
+consteval std::string JoinName(std::pair<std::string_view, std::string_view> v)
+{
+  return std::string(v.first) + std::string(v.second);
+}
+
+template <typename R, typename... Args>
+consteval std::string
+LuaGetFFIDef(R (*fn)(Args...), std::string name)
+{
+  return std::string(TypeName<R>::kType) + " " + name + "(" + GetParams(Args()...) + ")";
+}
+
+template <typename T> consteval std::string LuaGenFFICdef(const char *name, T t)
+{
+  auto n = LuaBreakName(name);
+  std::string s = LuaGetFFIDef(t, n);
+  s.push_back(';');
+  s.push_back('\0');
+  return s;
+}
+
+template <typename... Args>
+consteval std::string LuaGenFFICdefs(const char *names, Args... args)
+{
+  auto n = LuaBreakNames(names);
+  std::string s;
+  size_t i = 0;
+  (s.append(LuaGetFFIDef(args, JoinName(n[i++])) + ";\n"), ...);
+  s.push_back('\0');
+  return s;
+}
+
+} // namespace ct
 
 } // namespace details
 
@@ -868,6 +1057,10 @@ inline userdata::userdata(value o)
     : o((details::_lj_udata *)o.toobj<details::Tudata>())
 {
 }
+
+inline userdata::userdata(lua_State *L, int idx) : userdata(value(L, idx)) {}
+
+inline bool userdata::istype(int type) const { return o->udtype == type; }
 
 inline void *userdata::ptr() const { return o->payload; }
 
@@ -988,6 +1181,67 @@ void newuserdata(lua_State *L, T *obj)
 {
   lua_newtypeduserdata(L, obj, &T::kLuaTypeInfo);
 }
+
+template <typename R, typename... Args>
+bool bind_function(lua_State *L, userdata clib, const char *name, size_t namelen, const char *cdef, R(*fn)(Args...))
+{
+  if (!clib.istype(2))
+    return false;
+  return !lj_internal_bindfunc(L, clib.ptr(), name, namelen, cdef, fn);
+}
+
+namespace details {
+inline bool bind_one(lua_State *L, void *clib, std::string& n,
+              const std::pair<std::string_view, std::string_view> &name,
+              void *ptr)
+{
+  n = name.first;
+  if (!name.first.empty())
+    n.push_back('_');
+  n.append(name.second);
+  return !lj_internal_bindfunc(L, clib, n.data(), n.size(), NULL, ptr);
+}
+}
+
+template <typename Names, typename... Fns>
+bool bind_functions(lua_State *L, userdata clib, const char *cdef, const Names& names, Fns... fns)
+{
+  if (!clib.istype(2))
+    return false;
+  if (lj_internal_bindfunc(L, clib.ptr(), NULL, 0, cdef, NULL))
+    return false;
+  size_t i = 0;
+  std::string n;
+  n.reserve(128);
+  return (details::bind_one(L, clib.ptr(), n, names[i++], (void*)fns) && ...);
+}
+
+#define LJ_BIND_FUNCTION(L, clib, func)                                        \
+  do {                                                                         \
+    static constexpr ::lua::details::ct::static_array<                         \
+        ::lua::details::ct::static_size(                                       \
+            ::lua::details::ct::LuaBreakName(#func))>                          \
+        kName(::lua::details::ct::LuaBreakName(#func));                        \
+    static constexpr ::lua::details::ct::static_array<                         \
+        ::lua::details::ct::static_size(                                       \
+            ::lua::details::ct::LuaGenFFICdef(#func, func))>                   \
+        kDef(::lua::details::ct::LuaGenFFICdef(#func, func));                  \
+    ::lua::bind_function(L, clib,                                              \
+                         kName.str(), kName.size(), kDef.str(), func);         \
+  } while (0)
+
+#define LJ_BIND_FUNCTIONS(L, clib, ...)                                        \
+  do {                                                                         \
+    static constexpr const ::lua::details::ct::static_array<                   \
+        ::lua::details::ct::static_size(                                       \
+            ::lua::details::ct::LuaGenFFICdefs(#__VA_ARGS__, __VA_ARGS__))>    \
+        arr(::lua::details::ct::LuaGenFFICdefs(#__VA_ARGS__, __VA_ARGS__));    \
+    static constexpr const auto names =                                        \
+        ::lua::details::ct::to_joined_array<::lua::details::ct::static_size(   \
+            ::lua::details::ct::LuaBreakNames(#__VA_ARGS__))>(                 \
+            ::lua::details::ct::LuaBreakNames(#__VA_ARGS__));                  \
+    ::lua::bind_functions(L, clib, arr.str(), names, __VA_ARGS__);             \
+  } while (0)
 
 } // namespace lua
 #endif
