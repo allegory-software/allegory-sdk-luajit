@@ -351,11 +351,17 @@ else
   ifeq (GNU/kFreeBSD,$(TARGET_SYS))
     TARGET_XLIBS+= -ldl
   endif
+  ifeq (PSP2,$(TARGET_SYS))
+    TARGET_XLIBS+= -ldl -ltaihen_stub -lSceKernelModulemgr_stub -lSceSblSsMgr_stub -lSceLibKernel_stub -lSceSysmodule_stub
+  endif
 endif
 endif
 endif
 
 ifneq ($(HOST_SYS),$(TARGET_SYS))
+  ifeq (PSP2,$(TARGET_SYS))
+    HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_PSP2 -DLUAJIT_USE_SYSMALLOC
+  else
   ifeq (Windows,$(TARGET_SYS))
     HOST_XCFLAGS+= -malign-double -DLUAJIT_OS=LUAJIT_OS_WINDOWS
   else
@@ -369,6 +375,7 @@ ifneq ($(HOST_SYS),$(TARGET_SYS))
     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OSX -DTARGET_OS_IPHONE=1
   else
     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OTHER
+  endif
   endif
   endif
   endif
@@ -569,6 +576,9 @@ ifeq (SunOS,$(TARGET_SYS))
   BUILDMODE= static
 endif
 ifeq (PS3,$(TARGET_SYS))
+  BUILDMODE= static
+endif
+ifeq (PSP2,$(TARGET_SYS))
   BUILDMODE= static
 endif
 
