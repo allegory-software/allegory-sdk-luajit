@@ -1,6 +1,6 @@
 /*
 ** LuaJIT frontend. Runs commands, scripts, read-eval-print (REPL) etc.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -553,6 +553,7 @@ static int pmain(lua_State *L)
   /* Stop collector during library initialization. */
   lua_gc(L, LUA_GCSTOP, 0);
   luaL_openlibs(L);
+  luaopen_utf8(L);
   lua_gc(L, LUA_GCRESTART, -1);
 
   createargtable(L, argv, s->argc, argn);

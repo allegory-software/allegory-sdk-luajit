@@ -1,6 +1,6 @@
 /*
 ** Debug library.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -232,7 +232,7 @@ LJLIB_CF(debug_upvalueid)
   if ((uint32_t)n >= fn->l.nupvalues)
     lj_err_arg(L, 2, LJ_ERR_IDXRNG);
   lua_pushlightuserdata(L, isluafunc(fn) ? (void *)gcref(fn->l.uvptr[n]) :
-					   (void *)&fn->c.upvalue[n]);
+					   (void *)&fn->c.data->upvalue[n]);
   return 1;
 }
 

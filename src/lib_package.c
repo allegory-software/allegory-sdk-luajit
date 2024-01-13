@@ -1,6 +1,6 @@
 /*
 ** Package library.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2012 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -622,7 +622,7 @@ static int lj_cf_package_seeall(lua_State *L)
 static void setpath(lua_State *L, const char *fieldname, const char *envname,
 		    const char *def, int noenv)
 {
-#if LJ_TARGET_CONSOLE
+#if LJ_TARGET_CONSOLE || LJ_TARGET_PSP2
   const char *path = NULL;
   UNUSED(envname);
 #else

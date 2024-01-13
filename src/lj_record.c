@@ -1,6 +1,6 @@
 /*
 ** Trace recorder (bytecode -> SSA IR).
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_record_c
@@ -116,6 +116,7 @@ static void rec_check_slots(jit_State *J)
       cTValue *tv = &base[s];
       IRRef ref = tref_ref(tr);
       IRIns *ir = NULL;  /* Silence compiler. */
+      lj_assertJ(tv < J->L->top, "slot %d above top of Lua stack", s);
       if (!LJ_FR2 || ref || !(tr & (TREF_FRAME | TREF_CONT))) {
 	lj_assertJ(ref >= J->cur.nk && ref < J->cur.nins,
 		   "slot %d ref %04d out of range", s, ref - REF_BIAS);
@@ -686,6 +687,7 @@ static LoopEvent rec_itern(jit_State *J, BCReg ra, BCReg rb)
   copyTV(J->L, &ix.keyv, &J->L->base[ra-1]);
   ix.idxchain = (rb < 3);  /* Omit value type check, if unused. */
   ix.mobj = 1;  /* We need the next index, too. */
+  ix.mtspec = 0;
   J->maxslot = ra + lj_record_next(J, &ix);
   J->needsnap = 1;
   if (!tref_isnil(ix.key)) {  /* Looping back? */
@@ -818,6 +820,7 @@ static void rec_call_setup(jit_State *J, BCReg func, ptrdiff_t nargs)
   if (!tref_isfunc(fbase[0])) {  /* Resolve __call metamethod. */
     ix.tab = fbase[0];
     copyTV(J->L, &ix.tabv, functv);
+    ix.mtspec = 1;
     if (!lj_record_mm_lookup(J, &ix, MM_call) || !tref_isfunc(ix.mobj))
       lj_trace_err(J, LJ_TRERR_NOMM);
     for (i = ++nargs; i > LJ_FR2; i--)  /* Shift arguments up. */
@@ -975,6 +978,7 @@ void lj_record_ret(jit_State *J, BCReg rbase, ptrdiff_t gotresults)
       emitir(IRTG(IR_RETF, IRT_PGC), trpt, trpc);
       J->retdepth++;
       J->needsnap = 1;
+      J->scev.idx = REF_NIL;
       lj_assertJ(J->baseslot == 1+LJ_FR2, "bad baseslot for return");
       /* Shift result slots up and clear the slots of the new frame below. */
       memmove(J->base + cbase, J->base-1-LJ_FR2, sizeof(TRef)*nresults);
@@ -1102,8 +1106,15 @@ int lj_record_mm_lookup(jit_State *J, RecordIndex *ix, MMS mm)
       GG_OFS(g.gcroot[GCROOT_BASEMT+itypemap(&ix->tabv)]));
     goto nocheck;
   }
-  ix->mt = mt ? mix.tab : TREF_NIL;
-  emitir(IRTG(mt ? IR_NE : IR_EQ, IRT_TAB), mix.tab, lj_ir_knull(J, IRT_TAB));
+  if (ix->mtspec && mt) {
+    TRef kmt = lj_ir_ktab(J, mt);
+    emitir(IRTG(IR_EQ, IRT_TAB), mix.tab, kmt);
+    mix.tab = kmt;
+    ix->mt = kmt;
+  } else {
+    ix->mt = mt ? mix.tab : TREF_NIL;
+    emitir(IRTG(mt ? IR_NE : IR_EQ, IRT_TAB), mix.tab, lj_ir_knull(J, IRT_TAB));
+  }
 nocheck:
   if (mt) {
     GCstr *mmstr = mmname_str(J2G(J), mm);
@@ -1157,6 +1168,7 @@ static TRef rec_mm_len(jit_State *J, TRef tr, TValue *tv)
   RecordIndex ix;
   ix.tab = tr;
   copyTV(J->L, &ix.tabv, tv);
+  ix.mtspec = 1;
   if (lj_record_mm_lookup(J, &ix, MM_len)) {
     BCReg func = rec_mm_prep(J, lj_cont_ra);
     TRef *base = J->base + func;
@@ -1598,10 +1610,16 @@ TRef lj_record_idx(jit_State *J, RecordIndex *ix)
       lj_assertJ(!hasmm, "inconsistent metamethod handling");
       if (oldv == niltvg(J2G(J))) {  /* Need to insert a new key. */
 	TRef key = ix->key;
-	if (tref_isinteger(key))  /* NEWREF needs a TValue as a key. */
+	if (tref_isinteger(key)) {  /* NEWREF needs a TValue as a key. */
 	  key = emitir(IRTN(IR_CONV), key, IRCONV_NUM_INT);
-	else if (tref_isnumber(key) && tref_isk(key) && tvismzero(&ix->keyv))
-	  key = lj_ir_knum_zero(J);  /* Canonicalize -0.0 to +0.0. */
+	} else if (tref_isnum(key)) {
+	  if (tref_isk(key)) {
+	    if (tvismzero(&ix->keyv))
+	      key = lj_ir_knum_zero(J);  /* Canonicalize -0.0 to +0.0. */
+	  } else {
+	    emitir(IRTG(IR_EQ, IRT_NUM), key, key);  /* Check for !NaN. */
+	  }
+	}
 	xref = emitir(IRT(IR_NEWREF, IRT_PGC), ix->tab, key);
 	keybarrier = 0;  /* NEWREF already takes care of the key barrier. */
 #ifdef LUAJIT_ENABLE_TABLE_BUMP
@@ -1719,7 +1737,7 @@ static int rec_upvalue_constify(jit_State *J, GCupval *uvp)
 #if LJ_HASFFI
     if (tviscdata(o)) {
       GCcdata *cd = cdataV(o);
-      if (!cdataisv(cd) && !(cd->marked & LJ_GC_CDATA_FIN)) {
+      if (!cdataisv(cd) && !(cd->gcflags & LJ_GC_CDATA_FIN)) {
 	CType *ct = ctype_raw(ctype_ctsG(J2G(J)), cd->ctypeid);
 	if (!ctype_hassize(ct->info) || ct->size <= 16)
 	  return 1;
@@ -1765,16 +1783,16 @@ noconstify:
   /* Note: this effectively limits LJ_MAX_UPVAL to 127. */
   uv = (uv << 8) | (hashrot(uvp->dhash, uvp->dhash + HASH_BIAS) & 0xff);
   if (!uvp->closed) {
-    uref = tref_ref(emitir(IRTG(IR_UREFO, IRT_PGC), fn, uv));
     /* In current stack? */
     if (uvval(uvp) >= tvref(J->L->stack) &&
 	uvval(uvp) < tvref(J->L->maxstack)) {
       int32_t slot = (int32_t)(uvval(uvp) - (J->L->base - J->baseslot));
       if (slot >= 0) {  /* Aliases an SSA slot? */
+	uref = tref_ref(emitir(IRT(IR_UREFO, IRT_PGC), fn, uv));
 	emitir(IRTG(IR_EQ, IRT_PGC),
 	       REF_BASE,
 	       emitir(IRT(IR_ADD, IRT_PGC), uref,
-		      lj_ir_kint(J, (slot - 1 - LJ_FR2) * -8)));
+		      lj_ir_kintpgc(J, (slot - 1 - LJ_FR2) * -8)));
 	slot -= (int32_t)J->baseslot;  /* Note: slot number may be negative! */
 	if (val == 0) {
 	  return getslot(J, slot);
@@ -1785,12 +1803,21 @@ noconstify:
 	}
       }
     }
+    /* IR_UREFO+IRT_IGC is not checked for open-ness at runtime.
+    ** Always marked as a guard, since it might get promoted to IRT_PGC later.
+    */
+    uref = emitir(IRTG(IR_UREFO, tref_isgcv(val) ? IRT_PGC : IRT_IGC), fn, uv);
+    uref = tref_ref(uref);
     emitir(IRTG(IR_UGT, IRT_PGC),
 	   emitir(IRT(IR_SUB, IRT_PGC), uref, REF_BASE),
-	   lj_ir_kint(J, (J->baseslot + J->maxslot) * 8));
+	   lj_ir_kintpgc(J, (J->baseslot + J->maxslot) * 8));
   } else {
+    /* If fn is constant, then so is the GCupval*, and the upvalue cannot
+    ** transition back to open, so no guard is required in this case.
+    */
+    IRType t = (tref_isk(fn) ? 0 : IRT_GUARD) | IRT_PGC;
+    uref = tref_ref(emitir(IRT(IR_UREFC, t), fn, uv));
     needbarrier = 1;
-    uref = tref_ref(emitir(IRTG(IR_UREFC, IRT_PGC), fn, uv));
   }
   if (val == 0) {  /* Upvalue load */
     IRType t = itype2irt(uvval(uvp));
@@ -1941,11 +1968,11 @@ static void rec_varg(jit_State *J, BCReg dst, ptrdiff_t nresults)
   if (J->framedepth > 0) {  /* Simple case: varargs defined on-trace. */
     ptrdiff_t i;
     if (nvararg < 0) nvararg = 0;
-    if (nresults == -1) {
-      nresults = nvararg;
-      J->maxslot = dst + (BCReg)nvararg;
-    } else if (dst + nresults > J->maxslot) {
+    if (nresults != 1) {
+      if (nresults == -1) nresults = nvararg;
       J->maxslot = dst + (BCReg)nresults;
+    } else if (dst >= J->maxslot) {
+      J->maxslot = dst + 1;
     }
     if (J->baseslot + J->maxslot >= LJ_MAX_JSLOTS)
       lj_trace_err(J, LJ_TRERR_STACKOV);
@@ -1965,7 +1992,8 @@ static void rec_varg(jit_State *J, BCReg dst, ptrdiff_t nresults)
 	  emitir(IRTGI(IR_EQ), fr,
 		 lj_ir_kint(J, (int32_t)frame_ftsz(J->L->base-1)));
 	vbase = emitir(IRT(IR_SUB, IRT_IGC), REF_BASE, fr);
-	vbase = emitir(IRT(IR_ADD, IRT_PGC), vbase, lj_ir_kint(J, frofs-8*(1+LJ_FR2)));
+	vbase = emitir(IRT(IR_ADD, IRT_PGC), vbase,
+		       lj_ir_kintpgc(J, frofs-8*(1+LJ_FR2)));
 	for (i = 0; i < nload; i++) {
 	  IRType t = itype2irt(&J->L->base[i-1-LJ_FR2-nvararg]);
 	  J->base[dst+i] = lj_record_vload(J, vbase, (MSize)i, t);
@@ -1976,15 +2004,19 @@ static void rec_varg(jit_State *J, BCReg dst, ptrdiff_t nresults)
       }
       for (i = nvararg; i < nresults; i++)
 	J->base[dst+i] = TREF_NIL;
-      if (dst + (BCReg)nresults > J->maxslot)
+      if (nresults != 1 || dst >= J->maxslot) {
 	J->maxslot = dst + (BCReg)nresults;
+      }
     } else if (select_detect(J)) {  /* y = select(x, ...) */
       TRef tridx = J->base[dst-1];
       TRef tr = TREF_NIL;
       ptrdiff_t idx = lj_ffrecord_select_mode(J, tridx, &J->L->base[dst-1]);
       if (idx < 0) goto nyivarg;
-      if (idx != 0 && !tref_isinteger(tridx))
+      if (idx != 0 && !tref_isinteger(tridx)) {
+	if (tref_isstr(tridx))
+	  tridx = emitir(IRTG(IR_STRTO, IRT_NUM), tridx, 0);
 	tridx = emitir(IRTGI(IR_CONV), tridx, IRCONV_INT_NUM|IRCONV_INDEX);
+      }
       if (idx != 0 && tref_isk(tridx)) {
 	emitir(IRTGI(idx <= nvararg ? IR_GE : IR_LT),
 	       fr, lj_ir_kint(J, frofs+8*(int32_t)idx));
@@ -2012,7 +2044,7 @@ static void rec_varg(jit_State *J, BCReg dst, ptrdiff_t nresults)
 	IRType t;
 	TRef aref, vbase = emitir(IRT(IR_SUB, IRT_IGC), REF_BASE, fr);
 	vbase = emitir(IRT(IR_ADD, IRT_PGC), vbase,
-		       lj_ir_kint(J, frofs-(8<<LJ_FR2)));
+		       lj_ir_kintpgc(J, frofs-(8<<LJ_FR2)));
 	t = itype2irt(&J->L->base[idx-2-LJ_FR2-nvararg]);
 	aref = emitir(IRT(IR_AREF, IRT_PGC), vbase, tridx);
 	tr = lj_record_vload(J, aref, 0, t);
@@ -2088,6 +2120,7 @@ static TRef rec_cat(jit_State *J, BCReg baseslot, BCReg topslot)
   ix.tab = top[-1];
   ix.key = top[0];
   memcpy(savetv, &J->L->base[topslot-1], sizeof(savetv));  /* Save slots. */
+  ix.mtspec = 1;
   rec_mm_arith(J, &ix, MM_concat);  /* Call __concat metamethod. */
   memcpy(&J->L->base[topslot-1], savetv, sizeof(savetv));  /* Restore slots. */
   return 0;  /* No result yet. */
@@ -2292,6 +2325,7 @@ void lj_record_ins(jit_State *J)
 	rc = lj_ir_kint(J, 0);
 	ta = IRT_INT;
       } else {
+	ix.mtspec = 1;
 	rec_mm_comp(J, &ix, (int)op);
 	break;
       }
@@ -2315,10 +2349,12 @@ void lj_record_ins(jit_State *J)
       int diff;
       rec_comp_prep(J);
       diff = lj_record_objcmp(J, ra, rc, rav, rcv);
-      if (diff == 2 || !(tref_istab(ra) || tref_isudata(ra)))
+      if (diff == 2 || !(tref_istab(ra) || tref_isudata(ra))) {
 	rec_comp_fixup(J, J->pc, ((int)op & 1) == !diff);
-      else if (diff == 1)  /* Only check __eq if different, but same type. */
+      } else if (diff == 1) { /* Only check __eq if different, but same type. */
+	ix.mtspec = 1;
 	rec_mm_equal(J, &ix, (int)op);
+      }
     }
     break;
 
@@ -2369,6 +2405,7 @@ void lj_record_ins(jit_State *J)
     } else {
       ix.tab = rc;
       copyTV(J->L, &ix.tabv, rcv);
+      ix.mtspec = 1;
       rc = rec_mm_arith(J, &ix, MM_unm);
     }
     break;
@@ -2385,27 +2422,33 @@ void lj_record_ins(jit_State *J)
   case BC_ADDVN: case BC_SUBVN: case BC_MULVN: case BC_DIVVN:
   case BC_ADDVV: case BC_SUBVV: case BC_MULVV: case BC_DIVVV: {
     MMS mm = bcmode_mm(op);
-    if (tref_isnumber_str(rb) && tref_isnumber_str(rc))
+    if (tref_isnumber_str(rb) && tref_isnumber_str(rc)) {
       rc = lj_opt_narrow_arith(J, rb, rc, rbv, rcv,
 			       (int)mm - (int)MM_add + (int)IR_ADD);
-    else
+    } else {
+      ix.mtspec = 1;
       rc = rec_mm_arith(J, &ix, mm);
+    }
     break;
     }
 
   case BC_MODVN: case BC_MODVV:
   recmod:
-    if (tref_isnumber_str(rb) && tref_isnumber_str(rc))
+    if (tref_isnumber_str(rb) && tref_isnumber_str(rc)) {
       rc = lj_opt_narrow_mod(J, rb, rc, rbv, rcv);
-    else
+    } else {
+      ix.mtspec = 1;
       rc = rec_mm_arith(J, &ix, MM_mod);
+    }
     break;
 
   case BC_POW:
-    if (tref_isnumber_str(rb) && tref_isnumber_str(rc))
+    if (tref_isnumber_str(rb) && tref_isnumber_str(rc)) {
       rc = lj_opt_narrow_arith(J, rb, rc, rbv, rcv, IR_POW);
-    else
+    } else {
+      ix.mtspec = 1;
       rc = rec_mm_arith(J, &ix, MM_pow);
+    }
     break;
 
   /* -- Miscellaneous ops ------------------------------------------------- */
@@ -2458,7 +2501,14 @@ void lj_record_ins(jit_State *J)
   case BC_GGET: case BC_GSET:
     settabV(J->L, &ix.tabv, tabref(J->fn->l.env));
     ix.tab = emitir(IRT(IR_FLOAD, IRT_TAB), getcurrf(J), IRFL_FUNC_ENV);
+    if (gcrefeq(J->fn->l.env, J->L->env)) {
+      /* Specialize to the global environment. */
+      TRef ktab = lj_ir_ktab(J, tabref(J->fn->l.env));
+      emitir(IRTG(IR_EQ, IRT_TAB), ix.tab, ktab);
+      ix.tab = ktab;
+    }
     ix.idxchain = LJ_MAX_IDXCHAIN;
+    ix.mtspec = 0;
     rc = lj_record_idx(J, &ix);
     break;
 
@@ -2468,6 +2518,7 @@ void lj_record_ins(jit_State *J)
     /* fallthrough */
   case BC_TGETV: case BC_TGETS: case BC_TSETV: case BC_TSETS:
     ix.idxchain = LJ_MAX_IDXCHAIN;
+    ix.mtspec = tref_isk(ix.key) && tref_isstr(ix.key);
     rc = lj_record_idx(J, &ix);
     break;
   case BC_TGETR: case BC_TSETR:
@@ -2477,6 +2528,7 @@ void lj_record_ins(jit_State *J)
 
   case BC_TSETM:
     rec_tsetm(J, ra, (BCReg)(J->L->top - J->L->base), (int32_t)rcv->u32.lo);
+    J->maxslot = ra;  /* The table slot at ra-1 is the highest used slot. */
     break;
 
   case BC_TNEW:

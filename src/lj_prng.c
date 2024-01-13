@@ -1,6 +1,6 @@
 /*
 ** Pseudo-random number generation.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_prng_c
@@ -90,6 +90,10 @@ extern int sceRandomGetRandomNumber(void *buf, size_t len);
 #elif LJ_TARGET_NX
 
 #include <unistd.h>
+
+#elif LJ_TARGET_PSP2
+
+extern int sceKernelGetRandomNumber(void *buf, size_t len);
 
 #elif LJ_TARGET_WINDOWS || LJ_TARGET_XBOXONE
 
@@ -183,6 +187,11 @@ int LJ_FASTCALL lj_prng_seed_secure(PRNGState *rs)
 #elif LJ_TARGET_NX
 
   if (getentropy(rs->u, sizeof(rs->u)) == 0)
+    goto ok;
+
+#elif LJ_TARGET_PSP2
+
+  if (sceKernelGetRandomNumber(rs->u, sizeof(rs->u)) == 0)
     goto ok;
 
 #elif LJ_TARGET_UWP || LJ_TARGET_XBOXONE

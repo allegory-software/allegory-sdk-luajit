@@ -1,6 +1,6 @@
 /*
 ** FFI C library loader.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #include "lj_obj.h"
@@ -17,6 +17,8 @@
 #include "lj_cdata.h"
 #include "lj_clib.h"
 #include "lj_strfmt.h"
+#include "lj_cparse.h"
+#include "lj_vm.h"
 
 /* -- OS-specific functions ----------------------------------------------- */
 
@@ -42,6 +44,8 @@ LJ_NORET LJ_NOINLINE static void clib_error_(lua_State *L)
 
 #if LJ_TARGET_CYGWIN
 #define CLIB_SOPREFIX	"cyg"
+#elif LJ_TARGET_PSP2
+#define CLIB_SOPREFIX	""
 #else
 #define CLIB_SOPREFIX	"lib"
 #endif
@@ -50,6 +54,8 @@ LJ_NORET LJ_NOINLINE static void clib_error_(lua_State *L)
 #define CLIB_SOEXT	"%s.dylib"
 #elif LJ_TARGET_CYGWIN
 #define CLIB_SOEXT	"%s.dll"
+#elif LJ_TARGET_PSP2
+#define CLIB_SOEXT	"%s.suprx"
 #else
 #define CLIB_SOEXT	"%s.so"
 #endif
@@ -139,8 +145,13 @@ static void clib_unloadlib(CLibrary *cl)
 
 static void *clib_getsym(CLibrary *cl, const char *name)
 {
-  void *p = dlsym(cl->handle, name);
-  return p;
+  void *p;
+  if (cl->getprocaddr) {
+    p = cl->getprocaddr(cl->ud, name);
+    if (p || !cl->handle)
+      return p;
+  }
+  return dlsym(cl->handle, name);
 }
 
 #elif LJ_TARGET_WINDOWS
@@ -243,6 +254,11 @@ EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 static void *clib_getsym(CLibrary *cl, const char *name)
 {
   void *p = NULL;
+  if (cl->getprocaddr) {
+    p = cl->getprocaddr(cl->ud, name);
+    if (p || !cl->handle)
+      return p;
+  }
   if (cl->handle == CLIB_DEFHANDLE) {  /* Search default libraries. */
     MSize i;
     for (i = 0; i < CLIB_HANDLE_MAX; i++) {
@@ -402,6 +418,7 @@ static CLibrary *clib_new(lua_State *L, GCtab *mt)
   GCudata *ud = lj_udata_new(L, sizeof(CLibrary), t);
   CLibrary *cl = (CLibrary *)uddata(ud);
   cl->cache = t;
+  cl->getprocaddr = NULL;
   ud->udtype = UDTYPE_FFI_CLIB;
   /* NOBARRIER: The GCudata is new (marked white). */
   setgcref(ud->metatable, obj2gco(mt));
@@ -429,6 +446,62 @@ void lj_clib_default(lua_State *L, GCtab *mt)
 {
   CLibrary *cl = clib_new(L, mt);
   cl->handle = CLIB_DEFHANDLE;
+}
+
+static void *lj_clib_fake_getprocaddr(void *ud, const char *str)
+{
+  void *p = *(void **)ud;
+  *(void **)ud = NULL;
+  return p;
+}
+
+struct def_sym
+{
+  CLibrary *cl;
+  GCstr *name;
+};
+
+static TValue *cpcdefsym(lua_State *L, lua_CFunction dummy, void *ud)
+{
+  struct def_sym *sym = (struct def_sym *)ud;
+  lj_clib_index(L, sym->cl, sym->name);
+  return NULL;
+}
+
+
+int lj_clib_define_symbol(lua_State *L, CLibrary *cl, const char *cdef,
+    GCstr *name, void *impl)
+{
+  void *(*oldprocaddr)(void *, const char *) = cl->getprocaddr;
+  void *oldud = cl->ud;
+  struct def_sym sym = {cl, name};
+  CPState cp;
+  int ret;
+
+  if (cdef) {
+    cp.L = L;
+    cp.cts = ctype_cts(L);
+    cp.srcname = name ? strdata(name) : "external cdef";
+    cp.p = cdef;
+    cp.param = NULL;
+    cp.mode = CPARSE_MODE_MULTI | CPARSE_MODE_DIRECT;
+    ret = lj_cparse(&cp);
+    if (ret) {
+      return ret;
+    }
+  }
+
+  if (impl) {
+    cl->getprocaddr = &lj_clib_fake_getprocaddr;
+    cl->ud = &impl;
+    lj_vm_cpcall(L, NULL, &sym, cpcdefsym);
+    cl->getprocaddr = oldprocaddr;
+    cl->ud = oldud;
+    if (impl)
+      return LUA_ERRRUN;
+  }
+
+  return LUA_OK;
 }
 
 #endif

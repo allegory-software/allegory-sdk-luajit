@@ -1,6 +1,6 @@
 /*
 ** Public Lua/C API.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -25,6 +25,8 @@
 #include "lj_vm.h"
 #include "lj_strscan.h"
 #include "lj_strfmt.h"
+#include "lj_clib.h"
+#include "luacpp.h"
 
 /* -- Common helper functions --------------------------------------------- */
 
@@ -56,7 +58,7 @@ static TValue *index2adr(lua_State *L, int idx)
       return o;
     } else {
       idx = LUA_GLOBALSINDEX - idx;
-      return idx <= fn->c.nupvalues ? &fn->c.upvalue[idx-1] : niltv(L);
+      return idx <= fn->c.nupvalues ? &fn->c.data->upvalue[idx - 1] : niltv(L);
     }
   }
 }
@@ -104,7 +106,12 @@ LUA_API int lua_checkstack(lua_State *L, int size)
   if (size > LUAI_MAXCSTACK || (L->top - L->base + size) > LUAI_MAXCSTACK) {
     return 0;  /* Stack overflow. */
   } else if (size > 0) {
-    lj_state_checkstack(L, (MSize)size);
+    int avail = (int)(mref(L->maxstack, TValue) - L->top);
+    if (size > avail &&
+	lj_state_cpgrowstack(L, (MSize)(size - avail)) != LUA_OK) {
+      L->top--;
+      return 0;  /* Out of memory. */
+    }
   }
   return 1;
 }
@@ -597,7 +604,7 @@ LUA_API lua_CFunction lua_tocfunction(lua_State *L, int idx)
   if (tvisfunc(o)) {
     BCOp op = bc_op(*mref(funcV(o)->c.pc, BCIns));
     if (op == BC_FUNCC || op == BC_FUNCCW)
-      return funcV(o)->c.f;
+      return funcV(o)->c.data->f;
   }
   return NULL;
 }
@@ -611,6 +618,22 @@ LUA_API void *lua_touserdata(lua_State *L, int idx)
     return lightudV(G(L), o);
   else
     return NULL;
+}
+
+LUA_API void *(lua_totypeduserdata)(lua_State *L, int idx, unsigned int type)
+{
+  cTValue *o = index2adr(L, idx);
+  if (tvisudata(o)) {
+    GCudata *ud = udataV(o);
+    if (ud->udtype == UDTYPE_TYPED) {
+      if (ud->len == type)
+        return uddata(ud);
+      const struct lua_typeduserdatainfo *info =
+          (const struct lua_typeduserdatainfo *)gcrefu(ud->env);
+      return info->type_cast ? info->type_cast(uddata(ud), type) : NULL;
+    }
+  }
+  return NULL;
 }
 
 LUA_API lua_State *lua_tothread(lua_State *L, int idx)
@@ -692,12 +715,12 @@ LUA_API void lua_pushcclosure(lua_State *L, lua_CFunction f, int n)
   lj_gc_check(L);
   lj_checkapi_slot(n);
   fn = lj_func_newC(L, (MSize)n, getcurrenv(L));
-  fn->c.f = f;
+  fn->c.data->f = f;
   L->top -= n;
   while (n--)
-    copyTV(L, &fn->c.upvalue[n], L->top+n);
+    copyTV(L, &fn->c.data->upvalue[n], L->top + n);
   setfuncV(L, L->top, fn);
-  lj_assertL(iswhite(obj2gco(fn)), "new GC object is not white");
+  lj_assertL(iswhite(G(L), obj2gco(fn)), "new GC object is not white");
   incr_top(L);
 }
 
@@ -720,6 +743,15 @@ LUA_API void lua_createtable(lua_State *L, int narray, int nrec)
 {
   lj_gc_check(L);
   settabV(L, L->top, lj_tab_new_ah(L, narray, nrec));
+  incr_top(L);
+}
+
+LUA_API void luaJIT_createtable(lua_State *L, int narray, int nrec)
+{
+  lj_gc_check(L);
+  settabV(L, L->top,
+          lj_tab_newgc(L, (uint32_t)(narray > 0 ? narray + 1 : 0),
+                       hsize2hbits(nrec)));
   incr_top(L);
 }
 
@@ -766,6 +798,41 @@ LUA_API void *lua_newuserdata(lua_State *L, size_t size)
   setudataV(L, L->top, ud);
   incr_top(L);
   return uddata(ud);
+}
+
+LUA_API void lua_newtypeduserdata(lua_State *L, void *ptr,
+                                  const struct lua_typeduserdatainfo *info)
+{
+  GCudata *ud;
+  lj_checkapi(info && ptr && info->type_id != 0, "bad typed userdata");
+  lj_gc_check(L);
+  ud = lj_udata_new(L, 0, NULL);
+  setudataV(L, L->top, ud);
+  incr_top(L);
+  ud->udtype = UDTYPE_TYPED;
+  ud->len = info->type_id;
+  setmref(ud->payload, ptr);
+  setgcrefp(ud->env, info);
+}
+
+LUA_API void(lua_releasetypeduserdata)(lua_State *L, int idx)
+{
+  cTValue *o = index2adr(L, idx);
+  if (tvisudata(o)) {
+    GCudata *ud = udataV(o);
+    if (ud->udtype == UDTYPE_TYPED) {
+      const struct lua_typeduserdatainfo *info = (const struct lua_typeduserdatainfo *)
+          gcrefu(ud->env);
+      if (info) {
+        info->release(uddata(ud));
+
+        setmref(ud->payload, NULL);
+        setgcrefnull(ud->env);
+        ud->len = 0;
+        ud->udtype = UDTYPE_USERDATA;
+      }
+    }
+  }
 }
 
 LUA_API void lua_concat(lua_State *L, int n)
@@ -823,11 +890,12 @@ LUA_API void lua_getfield(lua_State *L, int idx, const char *k)
   incr_top(L);
 }
 
-LUA_API void lua_rawget(lua_State *L, int idx)
+LUA_API int lua_rawget(lua_State *L, int idx) // PATCH: return value changed to int
 {
   cTValue *t = index2adr(L, idx);
   lj_checkapi(tvistab(t), "stack slot %d is not a table", idx);
   copyTV(L, L->top-1, lj_tab_get(L, tabV(t), L->top-1));
+  return itype(L->top-1);  // PATCH: return type of value
 }
 
 LUA_API void lua_rawgeti(lua_State *L, int idx, int n)
@@ -835,6 +903,19 @@ LUA_API void lua_rawgeti(lua_State *L, int idx, int n)
   cTValue *v, *t = index2adr(L, idx);
   lj_checkapi(tvistab(t), "stack slot %d is not a table", idx);
   v = lj_tab_getint(tabV(t), n);
+  if (v) {
+    copyTV(L, L->top, v);
+  } else {
+    setnilV(L->top);
+  }
+  incr_top(L);
+}
+
+LUA_API void lua_rawgetp(lua_State *L, int idx, const void *p) // PATCH: new function, note that it does not return an int like upstream
+{
+  cTValue *v, *t = index2adr(L, idx);
+  lj_checkapi(tvistab(t), "stack slot %d is not a table", idx);
+  v = lj_tab_get(L, tabV(t), p);
   if (v) {
     copyTV(L, L->top, v);
   } else {
@@ -879,7 +960,10 @@ LUA_API void lua_getfenv(lua_State *L, int idx)
   if (tvisfunc(o)) {
     settabV(L, L->top, tabref(funcV(o)->c.env));
   } else if (tvisudata(o)) {
-    settabV(L, L->top, tabref(udataV(o)->env));
+    if (udataV(o)->udtype == UDTYPE_TYPED)
+      setnilV(L->top);
+    else
+      settabV(L, L->top, tabref(udataV(o)->env));
   } else if (tvisthread(o)) {
     settabV(L, L->top, tabref(threadV(o)->env));
   } else {
@@ -922,7 +1006,7 @@ LUA_API void *lua_upvalueid(lua_State *L, int idx, int n)
   n--;
   lj_checkapi((uint32_t)n < fn->l.nupvalues, "bad upvalue %d", n);
   return isluafunc(fn) ? (void *)gcref(fn->l.uvptr[n]) :
-			 (void *)&fn->c.upvalue[n];
+			 (void *)&fn->c.data->upvalue[n];
 }
 
 LUA_API void lua_upvaluejoin(lua_State *L, int idx1, int n1, int idx2, int n2)
@@ -1041,8 +1125,11 @@ LUA_API int lua_setmetatable(lua_State *L, int idx)
       lj_gc_objbarriert(L, tabV(o), mt);
   } else if (tvisudata(o)) {
     setgcref(udataV(o)->metatable, obj2gco(mt));
-    if (mt)
+    if (mt) {
+      if (lj_meta_fastg(g, mt, MM_gc))
+        lj_mem_registergc_udata(L, udataV(o));
       lj_gc_objbarrier(L, udataV(o), mt);
+    }
   } else {
     /* Flush cache, since traces specialize to basemt. But not during __gc. */
     if (lj_trace_flushall(L))
@@ -1076,6 +1163,10 @@ LUA_API int lua_setfenv(lua_State *L, int idx)
   if (tvisfunc(o)) {
     setgcref(funcV(o)->c.env, obj2gco(t));
   } else if (tvisudata(o)) {
+    if (udataV(o)->udtype == UDTYPE_TYPED) {
+      L->top--;
+      return 0;
+    }
     setgcref(udataV(o)->env, obj2gco(t));
   } else if (tvisthread(o)) {
     setgcref(threadV(o)->env, obj2gco(t));
@@ -1151,7 +1242,7 @@ static TValue *cpcall(lua_State *L, lua_CFunction func, void *ud)
 {
   GCfunc *fn = lj_func_newC(L, 0, getcurrenv(L));
   TValue *top = L->top;
-  fn->c.f = func;
+  fn->c.data->f = func;
   setfuncV(L, top++, fn);
   if (LJ_FR2) setnilV(top++);
 #if LJ_64
@@ -1262,7 +1353,7 @@ LUA_API int lua_gc(lua_State *L, int what, int data)
     g->gc.threshold = data == -1 ? (g->gc.total/100)*g->gc.pause : g->gc.total;
     break;
   case LUA_GCCOLLECT:
-    lj_gc_fullgc(L);
+    lj_gc_fullgc(L, data);
     break;
   case LUA_GCCOUNT:
     res = (int)(g->gc.total >> 10);
@@ -1311,3 +1402,74 @@ LUA_API void lua_setallocf(lua_State *L, lua_Alloc f, void *ud)
   g->allocf = f;
 }
 
+LUA_API size_t luaJIT_getpagesize()
+{
+  return ARENA_SIZE;
+}
+
+LUA_API uint64_t lj_internal_getstack(lua_State *L, int index)
+{
+  TValue *o = index2adr(L, index);
+  return o->u64;
+}
+
+LUA_API void lj_internal_setstack(lua_State *L, int index, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copy_slot(L, &t, index);
+}
+
+LUA_API void lj_internal_pushraw(lua_State *L, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copyTV(L, L->top, &t);
+  incr_top(L);
+}
+
+LUA_API void *lj_internal_mt__index(const lua_State *L, void *mt)
+{
+  return (void *)lj_meta_fast(L, (GCtab *)mt, MM_index);
+}
+
+LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n)
+{
+  return lj_str_new((lua_State*)L, s, n);
+}
+
+LUA_API void *lj_internal_newtab(const lua_State *L)
+{
+  return lj_tab_new((lua_State *)L, 0, 0);
+}
+
+LUA_API void lj_internal_rawset(const lua_State *cL, void *t, uint64_t k, uint64_t v)
+{
+  lua_State *L = (lua_State *)cL;
+  TValue key, val;
+  TValue *dst;
+  key.u64 = k;
+  val.u64 = v;
+  dst = lj_tab_set(L, (GCtab*)t, &key);
+  copyTV(L, dst, &val);
+  lj_gc_anybarriert(L, t);
+}
+
+LUA_API void lj_internal_setmetatable(const lua_State *cL, void *rawt, void *rawmt)
+{
+  GCtab *t = (GCtab *)rawt;
+  GCtab *mt = (GCtab *)rawmt;
+  lua_State *L = (lua_State *)cL;
+  setgcref(t->metatable, obj2gco(mt));
+  if(mt)
+	lj_gc_objbarriert(L, t, mt);
+}
+
+LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name, size_t namelen,
+    const char *cdef, void *impl)
+{
+  GCstr *namestr = name ? lj_str_new(L, name, namelen) : NULL;
+  if (!!name != !!impl)
+    return LUA_ERRERR;
+  return lj_clib_define_symbol(L, (CLibrary *)clib, cdef, namestr, impl);
+}

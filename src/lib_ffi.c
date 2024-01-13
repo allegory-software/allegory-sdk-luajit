@@ -1,6 +1,6 @@
 /*
 ** FFI library.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lib_ffi_c
@@ -518,7 +518,7 @@ LJLIB_CF(ffi_new)	LJLIB_REC(.)
 	/* Add to finalizer table, if still enabled. */
 	copyTV(L, lj_tab_set(L, t, o-1), tv);
 	lj_gc_anybarriert(L, t);
-	cd->marked |= LJ_GC_CDATA_FIN;
+	cd->gcflags |= LJ_GC_CDATA_FIN;
       }
     }
   }
@@ -573,7 +573,7 @@ LJLIB_CF(ffi_typeinfo)
       setintV(lj_tab_setstr(L, t, lj_str_newlit(L, "sib")), (int32_t)ct->sib);
     if (gcref(ct->name)) {
       GCstr *s = gco2str(gcref(ct->name));
-      if (isdead(G(L), obj2gco(s))) flipwhite(obj2gco(s));
+      maybe_resurrect_str(G(L), s);
       setstrV(L, lj_tab_setstr(L, t, lj_str_newlit(L, "name")), s);
     }
     lj_gc_check(L);
@@ -745,6 +745,9 @@ LJLIB_CF(ffi_abi)	LJLIB_REC(.)
 #if LJ_ABI_WIN
     "\003win"
 #endif
+#if LJ_ABI_PAUTH
+    "\005pauth"
+#endif
 #if LJ_TARGET_UWP
     "\003uwp"
 #endif
@@ -776,7 +779,7 @@ LJLIB_CF(ffi_metatype)
   if (!(ctype_isstruct(ct->info) || ctype_iscomplex(ct->info) ||
 	ctype_isvector(ct->info)))
     lj_err_arg(L, 1, LJ_ERR_FFI_INVTYPE);
-  tv = lj_tab_setinth(L, t, -(int32_t)id);
+  tv = lj_tab_setinth(L, t, -(int32_t)ctype_typeid(cts, ct));
   if (!tvisnil(tv))
     lj_err_caller(L, LJ_ERR_PROTMT);
   settabV(L, tv, mt);

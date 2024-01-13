@@ -1,6 +1,6 @@
 /*
 ** Common definitions for the JIT compiler.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #ifndef _LJ_JIT_H
@@ -103,13 +103,18 @@
 /* Note: FMA is not set by default. */
 
 /* -- JIT engine parameters ----------------------------------------------- */
-
+#if LJ_TARGET_PSP2
+#define JIT_P_sizemcode_DEFAULT		1024
+#define JIT_P_maxmcode_DEFAULT          8192
+#else
+#define JIT_P_maxmcode_DEFAULT          512
 #if LJ_TARGET_WINDOWS || LJ_64
-/* See: http://blogs.msdn.com/oldnewthing/archive/2003/10/08/55239.aspx */
+/* See: https://devblogs.microsoft.com/oldnewthing/20031008-00/?p=42223 */
 #define JIT_P_sizemcode_DEFAULT		64
 #else
 /* Could go as low as 4K, but the mmap() overhead would be rather high. */
 #define JIT_P_sizemcode_DEFAULT		32
+#endif
 #endif
 
 /* Optimization parameters and their defaults. Length is a char in octal! */
@@ -259,11 +264,12 @@ typedef struct GCtrace {
   GCHeader;
   uint16_t nsnap;	/* Number of snapshots. */
   IRRef nins;		/* Next IR instruction. Biased with REF_BIAS. */
+  GCRef nextgc;
 #if LJ_GC64
   uint32_t unused_gc64;
 #endif
-  GCRef gclist;
   IRIns *ir;		/* IR instructions/constants. Biased with REF_BIAS. */
+  GCRef gclist;
   IRRef nk;		/* Lowest IR constant. Biased with REF_BIAS. */
   uint32_t nsnapmap;	/* Number of snapshot map elements. */
   SnapShot *snap;	/* Snapshot array. */
@@ -273,6 +279,9 @@ typedef struct GCtrace {
   BCIns startins;	/* Original bytecode of starting instruction. */
   MSize szmcode;	/* Size of machine code. */
   MCode *mcode;		/* Start of machine code. */
+#if LJ_ABI_PAUTH
+  ASMFunction mcauth;	/* Start of machine code, with ptr auth applied. */
+#endif
   MSize mcloop;		/* Offset of loop start in machine code. */
   uint16_t nchild;	/* Number of child traces (root trace only). */
   uint16_t spadjust;	/* Stack pointer adjustment (offset in bytes). */
@@ -295,6 +304,7 @@ typedef struct GCtrace {
   check_exp((n)>0 && (MSize)(n)<J->sizetrace, (GCtrace *)gcref(J->trace[(n)]))
 
 LJ_STATIC_ASSERT(offsetof(GChead, gclist) == offsetof(GCtrace, gclist));
+LJ_STATIC_ASSERT(offsetof(GChead, nextgc) == offsetof(GCtrace, nextgc));
 
 static LJ_AINLINE MSize snap_nextofs(GCtrace *T, SnapShot *snap)
 {

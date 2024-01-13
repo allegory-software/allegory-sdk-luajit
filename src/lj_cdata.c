@@ -1,6 +1,6 @@
 /*
 ** C data management.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #include "lj_obj.h"
@@ -42,8 +42,8 @@ GCcdata *lj_cdata_newv(lua_State *L, CTypeID id, CTSize sz, CTSize align)
   g = G(L);
   setgcrefr(cd->nextgc, g->gc.root);
   setgcref(g->gc.root, obj2gco(cd));
-  newwhite(g, obj2gco(cd));
-  cd->marked |= 0x80;
+  newwhite(obj2gco(cd));
+  cd->gcflags |= 0x80;
   cd->gct = ~LJ_TCDATA;
   cd->ctypeid = id;
 #ifdef COUNTS
@@ -64,9 +64,8 @@ GCcdata *lj_cdata_newx(CTState *cts, CTypeID id, CTSize sz, CTInfo info)
 /* Free a C data object. */
 void LJ_FASTCALL lj_cdata_free(global_State *g, GCcdata *cd)
 {
-  if (LJ_UNLIKELY(cd->marked & LJ_GC_CDATA_FIN)) {
+  if (LJ_UNLIKELY(cd->gcflags & LJ_GC_CDATA_FIN)) {
     GCobj *root;
-    makewhite(g, obj2gco(cd));
     markfinalized(obj2gco(cd));
     if ((root = gcref(g->gc.mmudata)) != NULL) {
       setgcrefr(cd->nextgc, root->gch.nextgc);
@@ -104,10 +103,10 @@ void lj_cdata_setfin(lua_State *L, GCcdata *cd, GCobj *obj, uint32_t it)
     tv = lj_tab_set(L, t, &tmp);
     if (it == LJ_TNIL) {
       setnilV(tv);
-      cd->marked &= ~LJ_GC_CDATA_FIN;
+      cd->gcflags &= ~LJ_GC_CDATA_FIN;
     } else {
       setgcV(L, tv, obj, it);
-      cd->marked |= LJ_GC_CDATA_FIN;
+      cd->gcflags |= LJ_GC_CDATA_FIN;
     }
   }
 }

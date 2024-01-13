@@ -1,6 +1,6 @@
 /*
 ** FFI C callback handling.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #include "lj_obj.h"
@@ -171,13 +171,13 @@ static void *callback_mcode_init(global_State *g, uint32_t *page)
 static void *callback_mcode_init(global_State *g, uint32_t *page)
 {
   uint32_t *p = page;
-  void *target = (void *)lj_vm_ffi_callback;
+  ASMFunction target = lj_vm_ffi_callback;
   MSize slot;
   *p++ = A64I_LE(A64I_LDRLx | A64F_D(RID_X11) | A64F_S19(4));
   *p++ = A64I_LE(A64I_LDRLx | A64F_D(RID_X10) | A64F_S19(5));
-  *p++ = A64I_LE(A64I_BR | A64F_N(RID_X11));
+  *p++ = A64I_LE(A64I_BR_AUTH | A64F_N(RID_X11));
   *p++ = A64I_LE(A64I_NOP);
-  ((void **)p)[0] = target;
+  ((ASMFunction *)p)[0] = target;
   ((void **)p)[1] = g;
   p += 4;
   for (slot = 0; slot < CALLBACK_MAX_SLOT; slot++) {
@@ -250,6 +250,10 @@ static void *callback_mcode_init(global_State *g, uint32_t *page)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#elif LJ_TARGET_PSP2
+
+#include <psp2/kernel/sysmem.h>
+
 #elif LJ_TARGET_POSIX
 
 #include <sys/mman.h>
@@ -275,6 +279,21 @@ static void callback_mcode_new(CTState *cts)
   p = LJ_WIN_VALLOC(NULL, sz, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
   if (!p)
     lj_err_caller(cts->L, LJ_ERR_FFI_CBACKOV);
+#elif LJ_TARGET_PSP2
+  {
+    int fail;
+    SceUID block = sceKernelAllocMemBlockForVM("LuaJITCallbackCodeMemBlock", sz);
+    if (block < 0)
+      fail = 1;
+    else if (LJ_UNLIKELY(sceKernelGetMemBlockBase(block, &p) < 0))
+      fail = 1;
+    else if (sceKernelOpenVMDomain() < 0)
+      fail = 1;
+    else
+      fail = 0;
+    if (fail)
+      lj_err_caller(cts->L, LJ_ERR_FFI_CBACKOV);
+  }
 #elif LJ_TARGET_POSIX
   p = mmap(NULL, sz, (PROT_READ|PROT_WRITE|CCPROT_CREATE), MAP_PRIVATE|MAP_ANONYMOUS,
 	   -1, 0);
@@ -295,6 +314,8 @@ static void callback_mcode_new(CTState *cts)
     DWORD oprot;
     LJ_WIN_VPROTECT(p, sz, PAGE_EXECUTE_READ, &oprot);
   }
+#elif LJ_TARGET_PSP2
+  sceKernelCloseVMDomain();
 #elif LJ_TARGET_POSIX
   mprotect(p, sz, (PROT_READ|PROT_EXEC));
 #endif
@@ -309,6 +330,14 @@ void lj_ccallback_mcode_free(CTState *cts)
 #if LJ_TARGET_WINDOWS
   VirtualFree(p, 0, MEM_RELEASE);
   UNUSED(sz);
+#elif LJ_TARGET_PSP2
+  {
+    SceUID block;
+    void *base = (void *)((uintptr_t)p & ~(uintptr_t)0xFFFFF);
+    block = sceKernelFindMemBlockByAddr(base, 0);
+    sceKernelFreeMemBlock(block);
+    UNUSED(sz);
+  }
 #elif LJ_TARGET_POSIX
   munmap(p, sz);
 #else
