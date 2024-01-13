@@ -74,6 +74,7 @@ int lj_arena_init(struct global_State *g, luaJIT_allocpages allocp,
 void lj_arena_cleanup(struct global_State *g);
 
 /* Add ARENA_FREELIST_CHUNK free arenas */
+void lj_arena_alloc_fill(arena_context *ctx);
 static inline void *lj_arena_alloc(arena_context *ctx)
 {
   if (!ctx->freelist_at) {
@@ -86,12 +87,20 @@ static inline void *lj_arena_alloc(arena_context *ctx)
       return NULL;
   }
   void *p = ctx->freelist[--ctx->freelist_at];
+#ifdef LUA_USE_ASSERT
+  memset(p, 0xDD, ARENA_SIZE);
+#endif
   return p;
 }
 
+
 /* Free the last ARENA_FREELIST_CHUNK arenas */
+void lj_arena_free_extra(arena_context *ctx);
 static inline void lj_arena_free(arena_context *ctx, void *p)
 {
+#ifdef LUA_USE_ASSERT
+  memset(p, 0xED, ARENA_SIZE);
+#endif
   if (ctx->freelist_at == ARENA_FREELIST_SIZE) {
     ctx->freepages(ctx->pageud, ctx->freelist + (ARENA_FREELIST_SIZE - ARENA_FREELIST_CHUNK), ARENA_FREELIST_CHUNK);
     ctx->freelist_at -= ARENA_FREELIST_CHUNK;

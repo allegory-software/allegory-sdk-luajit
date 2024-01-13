@@ -76,6 +76,9 @@ static LJ_NOINLINE uintptr_t move_blob(global_State *g, uintptr_t src, MSize sz)
   void *newp = lj_mem_newblob_g(g, sz);
   g->gc.bloblist_usage[gcablob(newp)->id] += sz;
   memcpy(newp, (void *)src, sz);
+#ifdef LUA_USE_ASSERT
+  memset((void *)src, 0xEE, sz);
+#endif
   return (uintptr_t)newp;
 }
 
@@ -101,8 +104,7 @@ static LJ_NOINLINE uintptr_t move_blob(global_State *g, uintptr_t src, MSize sz)
  * shift-free access
  */
 #define MULTIPLICATIVE_INVERSE_SHIFT 32
-#define MULTIPLICATIVE_INVERSE(x) \
-    (uint32_t)(1 + (1ull << MULTIPLICATIVE_INVERSE_SHIFT) / x)
+#define MULTIPLICATIVE_INVERSE(x) (uint32_t)(1 + (1ull << MULTIPLICATIVE_INVERSE_SHIFT) / x)
 
 /* ORDER LJ_T */
 const uint32_t kInverseDividers[~LJ_TNUMX] = {
@@ -115,9 +117,11 @@ const uint32_t kInverseDividers[~LJ_TNUMX] = {
     MULTIPLICATIVE_INVERSE(sizeof(GCudata)),
 };
 const uint32_t kDividers[~LJ_TNUMX] = {
-    0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    sizeof(GCstr),
     sizeof(GCupval),
-    0, 0,
+    sizeof(lua_State),
+    0,
     sizeof(GCfunc),
     0, 0,
     sizeof(GCtab),
@@ -571,7 +575,8 @@ static size_t traverse_udata(global_State *g, GCAudata *a, size_t threshold)
       a->mark[i] |= flags2bitmask(obj2gco(ud), j);
       if (mt)
         gc_mark_tab(g, mt);
-      gc_mark_tab(g, tabref(ud->env));
+      if (ud->udtype != UDTYPE_TYPED)
+        gc_mark_tab(g, tabref(ud->env));
       if (LJ_HASBUFFER && ud->udtype == UDTYPE_BUFFER) {
         SBufExt *sbx = (SBufExt *)uddata(ud);
         if (sbufiscow(sbx) && gcref(sbx->cowref))
@@ -891,6 +896,15 @@ static void *gc_sweep_tab_i256(global_State *g, GCAtab *a, uint32_t lim)
       free_enq(&a->hdr, g->gc.free_tab);
     }
 
+#ifdef LUA_USE_ASSERT
+    for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCtab); i++) {
+      for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+        GCtab *o = (GCtab *)a + +(i << 6) + tzcount64(f);
+        memset(o, 0xEF, sizeof(GCtab));
+      }
+    }
+#endif
+
     a->free_h = free;
   }
 
@@ -909,6 +923,15 @@ static void *gc_sweep_tab_i256(global_State *g, GCAtab *a, uint32_t lim)
   if (LJ_UNLIKELY(free && !a->free_h)) {
     free_enq(&a->hdr, g->gc.free_tab);
   }
+
+#ifdef LUA_USE_ASSERT
+  for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCtab); i++) {
+    for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+      GCtab *o = (GCtab *)a + +(i << 6) + tzcount64(f);
+      memset(o, 0xEF, sizeof(GCtab));
+    }
+  }
+#endif
 
   a->free_h = free;
 
@@ -948,6 +971,15 @@ static void *gc_sweep_tab1_i256(global_State *g, GCAtab *a)
     sweep_fixup(GCAtab, GCtab);
 
     sweep_free(GCAtab, tab, free_tab);
+
+#ifdef LUA_USE_ASSERT
+    for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCtab); i++) {
+      for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+        GCtab *o = (GCtab *)a + +(i << 6) + tzcount64(f);
+        memset(o, 0xEF, sizeof(GCtab));
+      }
+    }
+#endif
 
     a->free_h = free;
     a = (GCAtab *)a->hdr.next;
@@ -993,14 +1025,31 @@ static void *gc_sweep_fintab1_i256(global_State *g, GCAtab *a)
 
     sweep_free(GCAtab, fintab, free_fintab);
 
+#ifdef LUA_USE_ASSERT
+    for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCtab); i++) {
+      for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+        GCtab *o = (GCtab *)a + +(i << 6) + tzcount64(f);
+        memset(o, 0xEF, sizeof(GCtab));
+      }
+    }
+#endif
+
     a->free_h = free;
     a = (GCAtab *)a->hdr.next;
   } while (0);
   return a;
 }
 
-static void gc_presweep_process(global_State *g, GCAtab *a, uint32_t i,
-                                bitmap_t f)
+/*
+* do presweep in atomic
+* - calculate new fin value
+* - mark all crsp tables
+* propagate all marks
+* do sweep normally
+* - free = ~mark
+*/
+
+static void gc_presweep_process(global_State *g, GCAtab *a, uint32_t i, bitmap_t f)
 {
   for (uint32_t j = tzcount64(f); f; f = reset_lowest64(f), j = tzcount64(f)) {
     GCtab *t = aobj(a, GCtab, (i << 6) + j);
@@ -1144,6 +1193,15 @@ static void *gc_sweep_func_i256(global_State *g, GCAfunc *a, uint32_t lim)
 
     sweep_free(GCAfunc, func, free_func);
 
+#ifdef LUA_USE_ASSERT
+    for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCfunc); i++) {
+      for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+        GCfunc *o = (GCfunc *)a;
+        memset(o + (i << 6) + tzcount64(f), 0xEF, sizeof(GCfunc));
+      }
+    }
+#endif
+
     a->free_h = free;
     a = (GCAfunc *)a->hdr.next;
   }
@@ -1181,6 +1239,15 @@ static void *gc_sweep_uv_i256(global_State *g, GCAupval *a, uint32_t lim)
     sweep_fixup(GCAupval, GCupval);
 
     sweep_free(GCAupval, uv, free_uv);
+
+#ifdef LUA_USE_ASSERT
+    for (uint32_t i = 0; i < WORDS_FOR_TYPE_UNROUNDED(GCfunc); i++) {
+      for (uint64_t f = a->free[i]; f; f = reset_lowest64(f)) {
+        GCupval *o = (GCupval *)a;
+        memset(o + (i << 6) + tzcount64(f), 0xEF, sizeof(GCupval));
+      }
+    }
+#endif
 
     a->free_h = free;
     a = (GCAupval *)a->hdr.next;
@@ -1224,13 +1291,14 @@ static void *gc_sweep_uv1(global_State *g, GCAupval *a)
   return gc_sweep_uv_i256(g, a, 1);
 }
 
-static void gc_sweep_udata_obj(global_State *g, GCAudata *a, uint32_t i,
-                               bitmap_t f)
+static void gc_sweep_udata_obj(global_State *g, GCAudata *a, uint32_t i, bitmap_t f)
 {
   GCudata *base = aobj(a, GCudata, i << 6);
   for (uint32_t j = tzcount64(f); f; f = reset_lowest64(f), j = tzcount64(f)) {
     GCudata *ud = &base[j];
-    if (!(ud->gcflags & LJ_GC_MARK_MASK) && ud->len > 0) {
+    if (ud->udtype == UDTYPE_TYPED) {
+      ((struct lua_typeduserdatainfo*)gcrefu(ud->env))->release(uddata(ud));
+    } else if (!(ud->gcflags & LJ_GC_MARK_MASK) && ud->len > 0) {
       g->gc.malloc -= ud->len;
       g->allocf(g->allocd, uddata(ud), ud->len, 0);
     }
@@ -1685,7 +1753,6 @@ static size_t gc_onestep(lua_State *L)
       }
       g->gc.state = GCSsweep_blob;
     }
-    /* TODO: make this non-atomic again */
     return 0;
     }
   case GCSsweep_blob: {

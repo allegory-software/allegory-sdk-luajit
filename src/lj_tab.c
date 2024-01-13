@@ -108,6 +108,28 @@ GCtab *lj_tab_newgc(lua_State *L, uint32_t asize, uint32_t hbits)
     setmref(t->array, lj_mem_newv(L, asize, TValue));
     t->asize = asize;
   }
+
+  if (hbits)
+    newhpart(L, t, hbits);
+  return t;
+}
+
+GCtab *lj_tab_newgc(lua_State *L, uint32_t asize, uint32_t hbits)
+{
+  Node *nilnode;
+  GCtab *t = lj_mem_alloctabempty_gc(L);
+  t->hmask = 0;
+  nilnode = &G(L)->nilnode;
+  setmref(t->node, nilnode);
+#if LJ_GC64
+  setmref(t->freetop, nilnode);
+#endif
+  if (asize > 0) {
+    if (asize > LJ_MAX_ASIZE)
+      lj_err_msg(L, LJ_ERR_TABOV);
+    setmref(t->array, lj_mem_newv(L, asize, TValue));
+    t->asize = asize;
+  }
   if (hbits)
     newhpart(L, t, hbits);
 #ifdef COUNTS
@@ -115,7 +137,6 @@ GCtab *lj_tab_newgc(lua_State *L, uint32_t asize, uint32_t hbits)
 #endif
   return t;
 }
-
 
 /* Create a new table.
 **
