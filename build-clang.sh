@@ -18,7 +18,7 @@ mkdir -p build
 cd build
 
 # Configure the project with CMake using Ninja
-cmake -G Ninja ..
+cmake -G Ninja .. -DCMAKE_BUILD_TYPE=Release -USE_FORCE_CLANG=ON
 
 # Build the project
 ninja

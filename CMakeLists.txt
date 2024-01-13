@@ -36,8 +36,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 ## Set ccompiler and force system options
 option(USE_FORCE_GCC "Use GCC compiler" OFF)
 option(USE_FORCE_CLANG "Use Clang compiler" OFF)
-#option(USE_FORCE_VERSION_X64 "Force compiling for x86_64 (debuggin purposes)" OFF)
-#option(USE_FORCE_SYS_LINUX "Force compiling for Linux (debugging purposes)" OFF)
 
 if (USE_FORCE_GCC)
     message(STATUS "Using GCC compiler")
@@ -69,7 +67,15 @@ if (USE_FORCE_CLANG)
     endif()
 endif()
 
-include(cmake/OptimizeCompilerFlags.cmake)
+###include(cmake/OptimizeCompilerFlags.cmake)
+set(BUILD_TYPE "Release")
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mbmi")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mbmi")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
 
 ##### ------------- #####
 
@@ -714,11 +720,13 @@ install(TARGETS libluajit
 # Build the luajit binary
 if (LUAJIT_BUILD_EXE)
   add_executable(luajit ${LJ_DIR}/luajit.c)
+
   target_link_libraries(luajit libluajit)
   target_include_directories(luajit PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${LJ_DIR}
   )
+
   if(APPLE AND ${CMAKE_C_COMPILER_ID} STREQUAL "zig")
     target_link_libraries(luajit c pthread)
     set_target_properties(luajit PROPERTIES

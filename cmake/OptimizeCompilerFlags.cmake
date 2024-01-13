@@ -4,7 +4,7 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 message(STATUS "Build type: ${BUILD_TYPE}")
 
 ## Set build type
-option(NATIVE_OPTIMIZATIONS "Enable native optimizations" OFF)
+option(NATIVE_OPTIMIZATIONS "Enable native optimizations" ON)
 option(AGGRESSIVE_OPTIMIZATIONS "Enable aggresive optimizations" ON)
 option(UNSAFE_OPTIMIZATIONS "Enable aggresive optimizations" OFF)
 
@@ -20,7 +20,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
 
 ## Set GCC optimization flags
-if (USE_FORCE_GCC)
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     ## Aggressive optimizations
 	if (AGGRESSIVE_OPTIMIZATIONS)
         ## Unsafe optimizations
@@ -147,7 +147,7 @@ if (USE_FORCE_GCC)
 endif()
 
 ## Set Clang optimization flags
-if (USE_FORCE_CLANG)
+if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     # Use -Ofast or -O3 optimization
     if (AGGRESSIVE_OPTIMIZATION)
         if(UNSAFE_OPTIMIZATIONS)
@@ -168,15 +168,15 @@ if (USE_FORCE_CLANG)
         endif()
 
         ## These optimizations depends on wether if LLVM is built with Polly support or Polly support is installed per separate
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvectorize -fslp-vectorize -finline-functions")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvectorize -fslp-vectorize -finline-functions")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvectorize -fslp-vectorize -finline-all-functions")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvectorize -fslp-vectorize -finline-all-functions")
         # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -floop-parallelize-all -floop-unroll-and-jam -fvectorize -fslp-vectorize -finline-functions")
         # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -floop-parallelize-all -floop-unroll-and-jam -fvectorize -fslp-vectorize -finline-functions")
 
         ## FLTO optimizations
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -funroll-loops -flto=full")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -funroll-loops -flto=full")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -funroll-loops -flto=thin")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -funroll-loops -flto=thin")
 
         ## These optimizations depends on wether if LLVM is built with Polly support or Polly support is installed per separate
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Xclang -load -Xclang LLVMPolly.so -mllvm -polly")
@@ -202,15 +202,15 @@ if (USE_FORCE_CLANG)
         set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 
         ## These optimizations depends on wether if LLVM is built with Polly support or Polly support is installed per separate
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvectorize -fslp-vectorize -finline-small-functions")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvectorize -fslp-vectorize -finline-small-functions")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvectorize -fslp-vectorize -finline-functions")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvectorize -fslp-vectorize -finline-functions")
         # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -floop-parallelize-all -floop-unroll-and-jam -fvectorize -fslp-vectorize -finline-functions")
         # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -floop-parallelize-all -floop-unroll-and-jam -fvectorize -fslp-vectorize -finline-functions")
 
         ## FLTO optimizations
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -funroll-loops -flto=full")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -funroll-loops -flto=full")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -funroll-loops -flto=thin")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -funroll-loops -flto=thin")
 
         ## These optimizations depends on wether if LLVM is built with Polly support or Polly support is installed per separate
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Xclang -load -Xclang LLVMPolly.so -mllvm -polly")
