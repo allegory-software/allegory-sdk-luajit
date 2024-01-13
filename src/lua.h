@@ -151,6 +151,7 @@ LUA_API const char     *(lua_tolstring) (lua_State *L, int idx, size_t *len);
 LUA_API size_t          (lua_objlen) (lua_State *L, int idx);
 LUA_API lua_CFunction   (lua_tocfunction) (lua_State *L, int idx);
 LUA_API void	       *(lua_touserdata) (lua_State *L, int idx);
+LUA_API void	       *(lua_totypeduserdata) (lua_State *L, int idx, unsigned int type);
 LUA_API lua_State      *(lua_tothread) (lua_State *L, int idx);
 LUA_API const void     *(lua_topointer) (lua_State *L, int idx);
 
@@ -171,6 +172,11 @@ LUA_API void  (lua_pushboolean) (lua_State *L, int b);
 LUA_API void  (lua_pushlightuserdata) (lua_State *L, void *p);
 LUA_API int   (lua_pushthread) (lua_State *L);
 
+struct lua_typeduserdatainfo {
+  unsigned int type_id;
+  void (*release)(void *ptr);
+  void *(*type_cast)(void *ptr, unsigned int type_id);
+};
 
 /*
 ** get functions (Lua -> stack)
@@ -182,6 +188,9 @@ LUA_API void  (lua_rawgeti) (lua_State *L, int idx, int n);
 LUA_API void  (lua_rawgetp) (lua_State *L, int idx, const void *p); // PATCH: new function, note that it does not return an int like upstream
 LUA_API void  (lua_createtable) (lua_State *L, int narr, int nrec);
 LUA_API void *(lua_newuserdata) (lua_State *L, size_t sz);
+LUA_API void  (lua_newtypeduserdata) (lua_State *L, void *ptr,
+                                      const struct lua_typeduserdatainfo *info);
+LUA_API void  (lua_releasetypeduserdata) (lua_State *L, int idx);
 LUA_API int   (lua_getmetatable) (lua_State *L, int objindex);
 LUA_API void  (lua_getfenv) (lua_State *L, int idx);
 

@@ -25,6 +25,8 @@
 #include "lj_vm.h"
 #include "lj_strscan.h"
 #include "lj_strfmt.h"
+#include "lj_clib.h"
+#include "luacpp.h"
 
 /* -- Common helper functions --------------------------------------------- */
 
@@ -618,6 +620,22 @@ LUA_API void *lua_touserdata(lua_State *L, int idx)
     return NULL;
 }
 
+LUA_API void *(lua_totypeduserdata)(lua_State *L, int idx, unsigned int type)
+{
+  cTValue *o = index2adr(L, idx);
+  if (tvisudata(o)) {
+    GCudata *ud = udataV(o);
+    if (ud->udtype == UDTYPE_TYPED) {
+      if (ud->len == type)
+        return uddata(ud);
+      const struct lua_typeduserdatainfo *info =
+          (const struct lua_typeduserdatainfo *)gcrefu(ud->env);
+      return info->type_cast ? info->type_cast(uddata(ud), type) : NULL;
+    }
+  }
+  return NULL;
+}
+
 LUA_API lua_State *lua_tothread(lua_State *L, int idx)
 {
   cTValue *o = index2adr(L, idx);
@@ -782,6 +800,41 @@ LUA_API void *lua_newuserdata(lua_State *L, size_t size)
   return uddata(ud);
 }
 
+LUA_API void lua_newtypeduserdata(lua_State *L, void *ptr,
+                                  const struct lua_typeduserdatainfo *info)
+{
+  GCudata *ud;
+  lj_checkapi(info && ptr && info->type_id != 0, "bad typed userdata");
+  lj_gc_check(L);
+  ud = lj_udata_new(L, 0, NULL);
+  setudataV(L, L->top, ud);
+  incr_top(L);
+  ud->udtype = UDTYPE_TYPED;
+  ud->len = info->type_id;
+  setmref(ud->payload, ptr);
+  setgcrefp(ud->env, info);
+}
+
+LUA_API void(lua_releasetypeduserdata)(lua_State *L, int idx)
+{
+  cTValue *o = index2adr(L, idx);
+  if (tvisudata(o)) {
+    GCudata *ud = udataV(o);
+    if (ud->udtype == UDTYPE_TYPED) {
+      const struct lua_typeduserdatainfo *info = (const struct lua_typeduserdatainfo *)
+          gcrefu(ud->env);
+      if (info) {
+        info->release(uddata(ud));
+
+        setmref(ud->payload, NULL);
+        setgcrefnull(ud->env);
+        ud->len = 0;
+        ud->udtype = UDTYPE_USERDATA;
+      }
+    }
+  }
+}
+
 LUA_API void lua_concat(lua_State *L, int n)
 {
   lj_checkapi_slot(n);
@@ -907,7 +960,10 @@ LUA_API void lua_getfenv(lua_State *L, int idx)
   if (tvisfunc(o)) {
     settabV(L, L->top, tabref(funcV(o)->c.env));
   } else if (tvisudata(o)) {
-    settabV(L, L->top, tabref(udataV(o)->env));
+    if (udataV(o)->udtype == UDTYPE_TYPED)
+      setnilV(L->top);
+    else
+      settabV(L, L->top, tabref(udataV(o)->env));
   } else if (tvisthread(o)) {
     settabV(L, L->top, tabref(threadV(o)->env));
   } else {
@@ -1107,6 +1163,10 @@ LUA_API int lua_setfenv(lua_State *L, int idx)
   if (tvisfunc(o)) {
     setgcref(funcV(o)->c.env, obj2gco(t));
   } else if (tvisudata(o)) {
+    if (udataV(o)->udtype == UDTYPE_TYPED) {
+      L->top--;
+      return 0;
+    }
     setgcref(udataV(o)->env, obj2gco(t));
   } else if (tvisthread(o)) {
     setgcref(threadV(o)->env, obj2gco(t));
@@ -1345,4 +1405,71 @@ LUA_API void lua_setallocf(lua_State *L, lua_Alloc f, void *ud)
 LUA_API size_t luaJIT_getpagesize()
 {
   return ARENA_SIZE;
+}
+
+LUA_API uint64_t lj_internal_getstack(lua_State *L, int index)
+{
+  TValue *o = index2adr(L, index);
+  return o->u64;
+}
+
+LUA_API void lj_internal_setstack(lua_State *L, int index, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copy_slot(L, &t, index);
+}
+
+LUA_API void lj_internal_pushraw(lua_State *L, uint64_t tv)
+{
+  TValue t;
+  t.u64 = tv;
+  copyTV(L, L->top, &t);
+  incr_top(L);
+}
+
+LUA_API void *lj_internal_mt__index(const lua_State *L, void *mt)
+{
+  return (void *)lj_meta_fast(L, (GCtab *)mt, MM_index);
+}
+
+LUA_API void *lj_internal_getstr(const lua_State *L, const char *s, size_t n)
+{
+  return lj_str_new((lua_State*)L, s, n);
+}
+
+LUA_API void *lj_internal_newtab(const lua_State *L)
+{
+  return lj_tab_new((lua_State *)L, 0, 0);
+}
+
+LUA_API void lj_internal_rawset(const lua_State *cL, void *t, uint64_t k, uint64_t v)
+{
+  lua_State *L = (lua_State *)cL;
+  TValue key, val;
+  TValue *dst;
+  key.u64 = k;
+  val.u64 = v;
+  dst = lj_tab_set(L, (GCtab*)t, &key);
+  copyTV(L, dst, &val);
+  lj_gc_anybarriert(L, t);
+}
+
+LUA_API void lj_internal_setmetatable(const lua_State *cL, void *rawt, void *rawmt)
+{
+  GCtab *t = (GCtab *)rawt;
+  GCtab *mt = (GCtab *)rawmt;
+  lua_State *L = (lua_State *)cL;
+  setgcref(t->metatable, obj2gco(mt));
+  if(mt)
+	lj_gc_objbarriert(L, t, mt);
+}
+
+LUA_API int lj_internal_bindfunc(lua_State *L, void *clib, const char *name, size_t namelen,
+    const char *cdef, void *impl)
+{
+  GCstr *namestr = name ? lj_str_new(L, name, namelen) : NULL;
+  if (!!name != !!impl)
+    return LUA_ERRERR;
+  return lj_clib_define_symbol(L, (CLibrary *)clib, cdef, namestr, impl);
 }

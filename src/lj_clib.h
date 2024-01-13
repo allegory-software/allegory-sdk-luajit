@@ -17,12 +17,16 @@
 typedef struct CLibrary {
   void *handle;		/* Opaque handle for dynamic library loader. */
   GCtab *cache;		/* Cache for resolved symbols. Anchored in ud->env. */
+  void *(*getprocaddr)(void *, const char *); /* Application override */
+  void *ud;
 } CLibrary;
 
 LJ_FUNC TValue *lj_clib_index(lua_State *L, CLibrary *cl, GCstr *name);
 LJ_FUNC void lj_clib_load(lua_State *L, GCtab *mt, GCstr *name, int global);
 LJ_FUNC void lj_clib_unload(CLibrary *cl);
 LJ_FUNC void lj_clib_default(lua_State *L, GCtab *mt);
+LJ_FUNC int lj_clib_define_symbol(lua_State *L, CLibrary *cl,
+                                  const char *cdef, GCstr *name, void *impl);
 
 #endif
 

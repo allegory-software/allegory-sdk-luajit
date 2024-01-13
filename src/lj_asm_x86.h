@@ -1403,6 +1403,8 @@ static void asm_uref(ASMState *as, IRIns *ir)
       emit_rmro(as, XO_MOV, uv|REX_GC64,
                 ra_alloc1(as, ir->op1, RSET_GPR), offsetof(GCfuncL, uvptr));
     }
+    emit_rmro(as, XO_MOV, uv|REX_GC64, uv, (int32_t)sizeof(MRef) * (int32_t)(ir->op2 >> 8));
+    emit_rmro(as, XO_MOV, uv|REX_GC64, func, offsetof(GCfuncL, uvptr));
   }
 }
 
