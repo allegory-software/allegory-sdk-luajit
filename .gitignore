@@ -25,3 +25,11 @@ $RECYCLE.BIN/
 
 /.vs
 /bin*
+*.dll
+*.exe
+*.manifest
+*.dmp
+*.swp
+.tags
+.cache
+build
